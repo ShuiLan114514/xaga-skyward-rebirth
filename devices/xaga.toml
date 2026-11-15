@@ -23,6 +23,18 @@ recovery_libraries = [
     "/mnt/system/system/lib64/libbinder.so",
     "/mnt/system/system/lib64/libbinder_ndk.so",
     "/mnt/system/system/lib64/libvintf.so",
+    "/mnt/system/system/lib64/libutils.so",
+    "/mnt/system/system/lib64/libc++.so",
+    "/mnt/system/system/lib64/libbase.so",
+    "/mnt/system/system/lib64/libcutils.so",
+    "/mnt/system/system/lib64/liblog.so",
+    "/mnt/system/system/lib64/libselinux.so",
+    "/mnt/system/system/lib64/libprocessgroup.so",
+    "/mnt/system/system/lib64/libapexsupport.so",
+    "/mnt/system/system/lib64/libvndksupport.so",
+    "/mnt/system/system/lib64/libhidlbase.so",
+    "/mnt/system/system/lib64/android.hidl.token@1.0.so",
+    "/mnt/system/system/lib64/bootstrap/libdl_android.so",
 ]
 # The copy the installed system's libbinder is: its calls are opened with
 # the system header, not the recovery one a ramdisk with its own binder

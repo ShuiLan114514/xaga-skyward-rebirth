@@ -553,6 +553,12 @@ fn bring_up(cfg: &DeviceConfig, slot: skyward_vab::Slot, found: Result<keys::Fou
         skyward_sys::wait_prop("init.svc.servicemanager", "running", std::time::Duration::from_secs(5))
             .context("wait for the service directory")?;
     }
+    // A service directory built before Android 13 does not say it is ready,
+    // and the newer AIDL clients wait for it before registering, so the
+    // phone's own services would never come up behind it.
+    if skyward_sys::prop("servicemanager.ready").as_deref() != Some("true") {
+        skyward_sys::set_prop("servicemanager.ready", "true").context("say the service directory is ready")?;
+    }
     let nodes = skyward_sys::ueventd::apply()?;
     skyward_sys::kmsg(&format!("{nodes} device nodes given the owner their phone describes"))?;
     let props = skyward_info::installed_props(slot)?;
