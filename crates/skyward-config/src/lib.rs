@@ -301,6 +301,20 @@ pub struct Names {
     pub en: String,
 }
 
+/// Which copy of libbinder the services the recovery talks to load, as the
+/// call header each copy writes says: the recovery's own, the installed
+/// system's, or the vendor's.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+pub enum BinderHeader {
+    #[default]
+    #[serde(rename = "reco")]
+    Recovery,
+    #[serde(rename = "syst")]
+    System,
+    #[serde(rename = "vndr")]
+    Vendor,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct Device {
     pub codename: String,
@@ -333,6 +347,13 @@ pub struct Device {
     /// recovery's library folder before the programs start.
     #[serde(default)]
     pub recovery_libraries: Vec<String>,
+    /// The copy of libbinder the programs the recovery talks to load, which
+    /// its calls have to be opened with: the recovery's own unless the
+    /// phone's services load another, as they do on a phone whose recovery
+    /// ramdisk carries none and which the configuration gives the installed
+    /// system's.
+    #[serde(default)]
+    pub binder_header: BinderHeader,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -736,6 +757,17 @@ mod tests {
         assert_eq!(vendor.device.recovery_partition, "vendor_boot");
         assert!(DeviceConfig::parse("[device]\ncodename = \"x\"\nrecovery_partition = \"by-name/vendor_boot\"\n").is_err());
         assert!(DeviceConfig::parse("[device]\ncodename = \"x\"\nrecovery_partition = \"\"\n").is_err());
+    }
+
+    #[test]
+    fn the_binder_header_is_the_recovery_one_unless_a_phone_names_another() {
+        let plain = DeviceConfig::parse("[device]\ncodename = \"xaga\"\n").unwrap();
+        assert_eq!(plain.device.binder_header, BinderHeader::Recovery, "the recovery's own copy by default");
+        let syst = DeviceConfig::parse("[device]\ncodename = \"xaga\"\nbinder_header = \"syst\"\n").unwrap();
+        assert_eq!(syst.device.binder_header, BinderHeader::System);
+        let vndr = DeviceConfig::parse("[device]\ncodename = \"xaga\"\nbinder_header = \"vndr\"\n").unwrap();
+        assert_eq!(vndr.device.binder_header, BinderHeader::Vendor);
+        assert!(DeviceConfig::parse("[device]\ncodename = \"x\"\nbinder_header = \"recovery\"\n").is_err(), "the values are the marks' names");
     }
 
     #[test]

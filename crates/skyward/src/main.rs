@@ -651,6 +651,26 @@ const FILES_MADE: std::time::Duration = std::time::Duration::from_secs(5);
 #[cfg(target_os = "android")]
 const RECOVERY_LIBRARIES: &str = "/system/lib64";
 
+/// Copy into the recovery's own library folder the installed system's
+/// libraries its ramdisk leaves out, so that every program that loads them
+/// loads the same copy: the service directory, which the phone's init starts
+/// without a library path of its own, finds /system last, and the programs
+/// the configuration starts find it first. A recovery whose ramdisk carries
+/// no binder of its own needs this to talk to the phone's services at all.
+#[cfg(target_os = "android")]
+fn give_libraries(cfg: &DeviceConfig) -> Result<()> {
+    for library in &cfg.device.recovery_libraries {
+        let from = Path::new(library);
+        let to = Path::new(RECOVERY_LIBRARIES).join(from.file_name().expect("the configuration names each library's file"));
+        let mut part = to.clone().into_os_string();
+        part.push(".part");
+        std::fs::copy(from, &part).with_context(|| format!("copy {library} to {}", Path::new(&part).display()))?;
+        std::fs::rename(&part, &to).with_context(|| format!("put {} in place", to.display()))?;
+        skyward_sys::kmsg(&format!("{library} is in {}", to.display()))?;
+    }
+    Ok(())
+}
+
 /// Give the recovery's own logd the libraries of the installed system it
 /// loads, and start it at once rather than on init's next try, so that it
 /// keeps what the phone's own programs log from their start. Each library
@@ -788,6 +808,15 @@ fn recovery() -> Result<()> {
             bcb::clear(&misc)?;
         }
         let cfg = DeviceConfig::load(Path::new("/").join(ramdisk::CONFIG))?;
+        #[cfg(target_os = "android")]
+        {
+            use skyward_config::BinderHeader;
+            skyward_binder::parcel::use_header(match cfg.device.binder_header {
+                BinderHeader::Recovery => skyward_binder::parcel::Header::Recovery,
+                BinderHeader::System => skyward_binder::parcel::Header::System,
+                BinderHeader::Vendor => skyward_binder::parcel::Header::Vendor,
+            });
+        }
         skyward_sys::kmsg(&format!(
             "{} {} recovery up, misc command {:?} args {:?}, asking for {:?}",
             cfg.device.codename,
@@ -871,6 +900,11 @@ fn prepare(cfg: &DeviceConfig, slot: skyward_vab::Slot) -> Result<Vec<skyward_co
             }
             for m in &mounts.partitions {
                 skyward_sys::kmsg(&format!("mounted {} on {} ({})", m.partition, m.mount_point.display(), m.filesystem))?;
+            }
+            // The service directory has to load the same binder the phone's
+            // own programs do before any of them starts.
+            if let Err(e) = give_libraries(cfg) {
+                skyward_sys::kmsg(&format!("the installed system's libraries are not in place: {e:#}"))?;
             }
             let found = secure::libraries().and_then(|libraries| keys::found(slot, libraries.as_deref()));
             let steps = found.as_ref().ok().and_then(|found| found.steps.as_deref().ok());

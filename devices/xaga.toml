@@ -14,6 +14,20 @@ recovery_partition = "vendor_boot"
 # once, and starting it again after publishing the descriptions would take
 # the services that registered with it away.
 restart_service_directory = false
+# The recovery ramdisk leaves out the binder and VINTF libraries the service
+# directory is built against, and the phone's AIDL services load their own
+# from the vendor's VNDK. Giving all of them the installed system's copies
+# before anything starts keeps every program on the same copy of libbinder,
+# whose call header is the system one.
+recovery_libraries = [
+    "/mnt/system/system/lib64/libbinder.so",
+    "/mnt/system/system/lib64/libbinder_ndk.so",
+    "/mnt/system/system/lib64/libvintf.so",
+]
+# The copy the installed system's libbinder is: its calls are opened with
+# the system header, not the recovery one a ramdisk with its own binder
+# would use.
+binder_header = "syst"
 
 [display]
 # The 6.6-inch 1080 x 2460 panel, at the density the vendor partition's

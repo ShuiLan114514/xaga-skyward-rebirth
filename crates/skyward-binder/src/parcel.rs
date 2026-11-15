@@ -1,10 +1,43 @@
 use anyhow::{bail, Context, Result};
+use std::sync::atomic::{AtomicI32, Ordering};
 
 /// The mark libbinder writes into every call header. Both ends have to agree
-/// on it: it tells apart the copies of libbinder a phone carries. The system
-/// copy packs "SYST", the vendor copy "VNDR".
+/// on it: it tells apart the copies of libbinder a phone carries. The
+/// recovery copy packs "RECO", the system copy "SYST", and the vendor copy
+/// "VNDR".
+const HEADER_RECOVERY: i32 = i32::from_be_bytes(*b"RECO");
 const HEADER_SYSTEM: i32 = i32::from_be_bytes(*b"SYST");
 const HEADER_VENDOR: i32 = i32::from_be_bytes(*b"VNDR");
+
+/// Which copy of libbinder the services the recovery talks to load. A
+/// phone whose recovery ramdisk carries the recovery copy wants that one;
+/// one whose ramdisk leaves it out, and whose services load the installed
+/// system's, wants the system copy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Header {
+    Recovery,
+    System,
+    Vendor,
+}
+
+impl Header {
+    fn mark(self) -> i32 {
+        match self {
+            Header::Recovery => HEADER_RECOVERY,
+            Header::System => HEADER_SYSTEM,
+            Header::Vendor => HEADER_VENDOR,
+        }
+    }
+}
+
+/// The copy every call is opened with, until the device says which one its
+/// services load.
+static HEADER: AtomicI32 = AtomicI32::new(HEADER_RECOVERY);
+
+/// Open the calls this build makes with `header`.
+pub fn use_header(header: Header) {
+    HEADER.store(header.mark(), Ordering::Relaxed);
+}
 
 /// Strict mode gathers violations rather than acting on them; a caller with
 /// no policy of its own still sets that bit.
@@ -74,7 +107,7 @@ impl Parcel {
     /// A call to `interface`, opened with the header libbinder reads before
     /// it looks at anything the method itself takes.
     pub fn call(interface: &str) -> Parcel {
-        Parcel::call_with(interface, HEADER_SYSTEM)
+        Parcel::call_with(interface, HEADER.load(Ordering::Relaxed))
     }
 
     /// A call to a service built against the vendor copy of libbinder, which
@@ -323,7 +356,7 @@ mod tests {
         let mut r = Reader::new(p.bytes());
         assert_eq!(r.i32().unwrap(), i32::MIN, "strict mode gathers");
         assert_eq!(r.i32().unwrap(), -1, "no work source");
-        assert_eq!(r.i32().unwrap(), HEADER_SYSTEM, "the system mark, SYST");
+        assert_eq!(r.i32().unwrap(), HEADER_RECOVERY, "the recovery mark, RECO");
         assert_eq!(r.string().unwrap(), "a.b.IC");
         assert_eq!(r.here(), p.bytes().len(), "the header is all of it");
     }
