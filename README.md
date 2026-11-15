@@ -122,11 +122,12 @@ not been verified.
 | 🚧 REDMI K90 Ultra | `warsaw` | OS3.0.309.0.WHPCNXM (Android 16) |
 | 🚧 REDMI K100 Pro | `athens` | OS4.0.4.0.XPICNXM (Android 17) |
 | 🚧 REDMI K100 Pro Max | `songyuan` | OS4.0.4.0.XGNCNXM (Android 17) |
+| 🚧 Redmi Note 11T Pro | `xaga` | OS1.0.3.0.ULOCNXM (Android 14) |
 
 ## Installing Skyward
 
 Skyward needs an unlocked bootloader. Download the zip for your phone from
-[Releases](https://github.com/kirklin/skyward/releases), where each shows as the
+[Releases](https://github.com/ShuiLan114514/xaga-skyward-rebirth/releases), where each shows as the
 phone's model and codename, such as Xiaomi 17 Ultra (nezha). Check it against
 `SHA256SUMS`, unzip it, and flash the image inside to the recovery partition of
 the slot the phone runs from, with the phone in fastboot mode:
@@ -134,6 +135,15 @@ the slot the phone runs from, with the phone in fastboot mode:
 ```sh
 unzip skyward-v0.3.1-nezha-OS4.0.4.0.XPACNXM.zip
 fastboot flash recovery skyward-v0.3.1-nezha-OS4.0.4.0.XPACNXM.img
+fastboot reboot recovery
+```
+
+On a phone whose recovery lives in the `vendor_boot` partition, as the Redmi
+Note 11T Pro (xaga) keeps it, flash the image there instead:
+
+```sh
+unzip skyward-v0.3.3-xaga-OS1.0.3.0.ULOCNXM.zip
+fastboot flash vendor_boot skyward-v0.3.3-xaga-OS1.0.3.0.ULOCNXM.img
 fastboot reboot recovery
 ```
 

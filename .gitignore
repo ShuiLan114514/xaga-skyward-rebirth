@@ -1,4 +1,6 @@
 target/
+/out/
+/stock/
 .idea/
 .vscode/
 .DS_Store

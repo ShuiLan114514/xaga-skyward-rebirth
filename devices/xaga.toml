@@ -96,7 +96,7 @@ recovery = "fed80580d619b916d73b51b704f2af6c9f08afafc84810ced0b2397a0b52797f"
 # Where this build's own releases are published, which its update page asks
 # about a newer one. This fork publishes them itself; the project's own is
 # `kirklin/skyward`, which a phone that names none is asked about.
-releases = "BkaNeko/xaga-skyward"
+releases = "ShuiLan114514/xaga-skyward-rebirth"
 
 [update]
 # The phone maker's update server, which the stock updater asks about the

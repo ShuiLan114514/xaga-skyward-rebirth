@@ -580,6 +580,9 @@ fn bring_up(cfg: &DeviceConfig, slot: skyward_vab::Slot, found: Result<keys::Fou
         skyward_sys::kmsg(&format!("loaded {}", path.display()))?;
     }
     if !cfg.owners.is_empty() {
+        // A driver makes its nodes a moment after its module is in, and the
+        // phone's own programs cannot open them until they are there.
+        handover::wait_for_nodes(&cfg.owners, FILES_MADE);
         let given = handover::give(&cfg.owners)?;
         skyward_sys::kmsg(&format!("{} of the phone's own files handed to the accounts its init gives them", given.handed))?;
         if !given.missing.is_empty() {
@@ -643,31 +646,6 @@ fn bring_up(cfg: &DeviceConfig, slot: skyward_vab::Slot, found: Result<keys::Fou
 /// either of which may come after the load of the module returns.
 #[cfg(target_os = "android")]
 const FILES_MADE: std::time::Duration = std::time::Duration::from_secs(5);
-
-/// Give each file the phone's own init hands over as it boots to the
-/// account it names, with the mode it gives, as its chown and chmod lines
-/// do. The files are the ones the modules just loaded make, which the
-/// phone's own programs open as those accounts; one not there yet is
-/// waited for.
-#[cfg(target_os = "android")]
-fn hand_over(owners: &[skyward_config::Owners]) -> Result<usize> {
-    use skyward_sys::ueventd;
-    use std::os::unix::fs::PermissionsExt;
-    let known = ueventd::accounts(&ueventd::PASSWD_FILES.iter().chain(&ueventd::GROUP_FILES).copied().collect::<Vec<_>>());
-    let id = |name: &str| ueventd::account(&known, name).with_context(|| format!("the phone has no account named {name}"));
-    let mut handed = 0;
-    for run in owners {
-        let (uid, gid) = (id(&run.user)?, id(&run.group)?);
-        for path in &run.paths {
-            skyward_sys::wait_file(Path::new(path), FILES_MADE).context("wait for a file the modules just loaded make")?;
-            std::os::unix::fs::chown(path, Some(uid), Some(gid)).with_context(|| format!("give {path} to {}:{}", run.user, run.group))?;
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(run.mode))
-                .with_context(|| format!("give {path} the mode {:o}", run.mode))?;
-            handed += 1;
-        }
-    }
-    Ok(handed)
-}
 
 /// The folder the recovery's own programs load their libraries from.
 #[cfg(target_os = "android")]
