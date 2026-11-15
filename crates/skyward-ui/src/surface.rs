@@ -515,7 +515,7 @@ pub mod kms {
     }
 
     impl KmsSurface {
-        pub fn open(path: &str) -> Result<Self> {
+        pub fn open(path: &str, fastest_refresh: bool) -> Result<Self> {
             let card = open_card(path)?;
             let res = card.resource_handles().context("read KMS resources")?;
 
@@ -738,7 +738,7 @@ pub mod kms {
                 active,
                 mode_id,
                 preferred: first,
-                fastest,
+                fastest: if fastest_refresh { fastest } else { None },
                 spr,
                 conn,
                 lp,

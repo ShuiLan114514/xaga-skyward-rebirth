@@ -26,9 +26,16 @@ pub struct Encryption {
 }
 
 impl Encryption {
-    /// Read what an entry of the phone's own table says.
+    /// Read what an entry of the phone's own table says. Some phones keep
+    /// the whole partition's key in the metadata directory without
+    /// repeating the cipher in the table; the key directory they do name
+    /// says the partition is encrypted whole.
     pub fn of(entry: &Entry) -> Result<Encryption> {
-        let said = entry.extra("metadata_encryption").context("the phone says its data partition is not encrypted whole")?;
+        let said = match entry.extra("metadata_encryption") {
+            Some(said) => said,
+            None if entry.extra("keydirectory").is_some() => "aes-256-xts",
+            None => anyhow::bail!("the phone says its data partition is not encrypted whole"),
+        };
         let (name, rest) = said.split_once(':').unwrap_or((said, ""));
         let cipher = CIPHERS
             .iter()

@@ -7,6 +7,11 @@ use std::path::{Path, PathBuf};
 /// Where the phone's own partitions keep the table.
 pub const FILES: [&str; 2] = ["/vendor/etc/fstab.qcom", "/odm/etc/fstab.qcom"];
 
+/// The folders a phone keeps the tables its own hardware is described in,
+/// for phones that name their table after their SoC rather than qcom: the
+/// MediaTek phones' `fstab.mt6895`, for one.
+const FOLDERS: [&str; 2] = ["/vendor/etc", "/odm/etc"];
+
 /// One filesystem the phone knows about.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
@@ -51,14 +56,33 @@ pub fn entries(text: &str) -> Vec<Entry> {
     out
 }
 
-/// Every entry of the phone's own table, read from wherever the table is.
+/// The tables the phone keeps, the ones named for its SoC as well as qcom's,
+/// in the order they are read: the names known first, then what the folders
+/// hold, sorted so the same table is read first every time.
+fn files() -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = FILES.iter().map(PathBuf::from).collect();
+    let mut found = Vec::new();
+    for dir in FOLDERS {
+        let Ok(listing) = std::fs::read_dir(dir) else { continue };
+        for entry in listing.flatten() {
+            if entry.file_name().to_string_lossy().starts_with("fstab.") && !out.contains(&entry.path()) {
+                found.push(entry.path());
+            }
+        }
+    }
+    found.sort();
+    out.extend(found);
+    out
+}
+
+/// Every entry of the phone's own tables, read from wherever the tables are.
 fn table() -> Result<Vec<Entry>> {
     let mut out = Vec::new();
-    for file in FILES {
-        let text = match std::fs::read_to_string(file) {
+    for file in files() {
+        let text = match std::fs::read_to_string(&file) {
             Ok(text) => text,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(e) => return Err(e).with_context(|| format!("read {file}")),
+            Err(e) => return Err(e).with_context(|| format!("read {}", file.display())),
         };
         out.extend(entries(&text));
     }

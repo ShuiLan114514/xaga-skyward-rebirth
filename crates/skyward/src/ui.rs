@@ -90,19 +90,39 @@ struct Backlight {
 }
 
 impl Backlight {
-    fn open() -> Result<Self> {
-        let mut dirs: Vec<PathBuf> = fs::read_dir("/sys/class/backlight")
-            .context("read /sys/class/backlight")?
-            .map(|e| e.map(|e| e.path()))
-            .collect::<std::io::Result<_>>()?;
-        dirs.sort();
+    /// Find the panel's backlight, where the phone has one a recovery can
+    /// write: the class the kernel gives it, or the LED MediaTek names its
+    /// panel light by. A phone with neither still recovers, with the light
+    /// the bootloader left.
+    fn open() -> Result<Option<Self>> {
+        let dirs = |folder: &str| -> Result<Vec<PathBuf>> {
+            match fs::read_dir(folder) {
+                Ok(listing) => {
+                    let mut paths = listing.map(|e| e.map(|e| e.path())).collect::<std::io::Result<Vec<_>>>()?;
+                    paths.sort();
+                    Ok(paths)
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+                Err(e) => Err(e).with_context(|| format!("read {folder}")),
+            }
+        };
+        let class = dirs("/sys/class/backlight")?;
         // Qualcomm panels expose panel0-backlight; take it when present.
-        let dir = dirs
+        let dir = class
             .iter()
             .find(|d| d.file_name().is_some_and(|n| n == "panel0-backlight"))
-            .or(dirs.first())
-            .ok_or_else(|| anyhow!("no backlight device"))?
-            .clone();
+            .cloned()
+            .or_else(|| class.first().cloned())
+            .or_else(|| {
+                // MediaTek's panel backlight is an LED named lcd-backlight.
+                dirs("/sys/class/leds").ok().and_then(|leds| {
+                    leds.into_iter().find(|d| d.file_name().is_some_and(|n| n.to_string_lossy().contains("backlight")))
+                })
+            });
+        let Some(dir) = dir else {
+            skyward_sys::kmsg("no backlight device; the panel keeps the light the bootloader gave it")?;
+            return Ok(None);
+        };
         let read = |name: &str| -> Result<u32> {
             fs::read_to_string(dir.join(name))
                 .with_context(|| format!("read {}/{name}", dir.display()))?
@@ -110,9 +130,12 @@ impl Backlight {
                 .parse()
                 .with_context(|| format!("parse {name}"))
         };
-        let top = normal_max(read("max_brightness")?)?;
+        // A panel that gives no maximum is driven on the scale its LED class
+        // uses when it gives none.
+        let max = read("max_brightness").unwrap_or(255);
+        let top = normal_max(max).unwrap_or(max);
         let level = read("brightness")?;
-        Ok(Backlight { path: dir.join("brightness"), top, level })
+        Ok(Some(Backlight { path: dir.join("brightness"), top, level }))
     }
 
     /// Light the panel at `level` of its normal maximum, or turn it off
@@ -1011,7 +1034,11 @@ fn detach(services: Vec<Service>) -> Detach {
 /// on a phone that has them, and checks a zip's signature before its
 /// install script runs.
 fn install_options(app: &App) -> Options {
-    Options { keep: app.state.keep_recovery && app.state.recovery_partitions, signed: app.state.check_signature }
+    Options {
+        keep: app.state.keep_recovery && app.state.recovery_partitions,
+        signed: app.state.check_signature,
+        recovery_partition: app.state.recovery_partition.clone(),
+    }
 }
 
 /// How often the WLAN page scans while it shows.
@@ -1127,7 +1154,8 @@ struct Pages<'a> {
     /// adbd and fastbootd ask over it to go over to fastboot and back.
     control: Option<Control>,
     haptics: Option<Haptics>,
-    backlight: Backlight,
+    /// The panel's backlight, where the phone has one a recovery can write.
+    backlight: Option<Backlight>,
     keeper: Keeper,
     shown_clock: String,
     /// The page shown first, until it has been told it shows.
@@ -1238,7 +1266,7 @@ impl<'a> Pages<'a> {
         untaken(&mut unread.battery, "the battery", battery.as_ref().err())?;
         let info = skyward_info::collect_with(cfg, battery.unwrap_or_default())?;
         let fonts = Fonts::load(font, 0, mono)?;
-        let mut surface = KmsSurface::open("/dev/dri/card0")?;
+        let mut surface = KmsSurface::open("/dev/dri/card0", cfg.display.fastest_refresh)?;
         let (w, h) = surface.size();
         // A touch controller that follows the panel wakes as the panel goes
         // from rest to running, and at no other time. The recovery service
@@ -1340,7 +1368,8 @@ impl<'a> Pages<'a> {
         // partitions in both slots, which a switch writes.
         let by_name = Path::new(skyward_block::BY_NAME);
         let both = |base: &str| -> Result<bool> { Ok(by_name.join(format!("{base}_a")).try_exists()? && by_name.join(format!("{base}_b")).try_exists()?) };
-        app.state.recovery_partitions = both("recovery")?;
+        app.state.recovery_partition = cfg.device.recovery_partition.clone();
+        app.state.recovery_partitions = both(&app.state.recovery_partition)?;
         app.state.dual_boot = app.state.recovery_partitions && both("boot")? && both("init_boot")?;
         // The second system's work; the systems are read at once, for the home
         // page to name the one that starts, once a switch cut off before is
@@ -1714,10 +1743,12 @@ impl<'a> Pages<'a> {
         // After the frame is on the panel, so a panel coming back on lights
         // with what it should show now, never with what it showed when it
         // went off.
-        if self.backlight.level == 0 && panel.is_some() {
+        if self.backlight.as_ref().is_some_and(|backlight| backlight.level == 0) && panel.is_some() {
             self.surface.settle()?;
         }
-        self.backlight.show(panel)?;
+        if let Some(backlight) = self.backlight.as_mut() {
+            backlight.show(panel)?;
+        }
         if panel.is_some() {
             // Lit, a panel that came on again switches to its fastest
             // refresh.
@@ -2614,7 +2645,11 @@ impl Pages<'_> {
             Effect::CheckSkyward => {
                 ensure!(self.skyward_checker.is_none(), "GitHub is being asked already");
                 let probe = cfg.wlan.as_ref().context("the phone's WLAN is not brought up")?.probe.clone();
-                let task = updates::Task::CheckSkyward { probe, codename: cfg.device.codename.clone() };
+                let task = updates::Task::CheckSkyward {
+                    probe,
+                    codename: cfg.device.codename.clone(),
+                    releases: cfg.releases().to_string(),
+                };
                 self.skyward_checker = Some(updates::Worker::start(task, self.servers.clone())?);
             }
             // The zip goes into the recovery's own folder, which is
@@ -2625,7 +2660,12 @@ impl Pages<'_> {
                 ensure!(self.installer.is_none(), "an installer is running already");
                 skyward_sys::kmsg(&format!("updating Skyward to {}", build.name))?;
                 let path = Path::new(skyward_sys::RUN).join(&build.name);
-                let task = updates::Task::UpdateSkyward { build, codename: cfg.device.codename.clone(), path };
+                let task = updates::Task::UpdateSkyward {
+                    build,
+                    codename: cfg.device.codename.clone(),
+                    partition: cfg.device.recovery_partition.clone(),
+                    path,
+                };
                 self.skyward_updater = Some(updates::Worker::start(task, self.servers.clone())?);
             }
             Effect::StopSkywardUpdate => self.skyward_updater.as_ref().context("Skyward is not being updated")?.stop(),

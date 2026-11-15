@@ -14,6 +14,10 @@ mod decrypt;
 #[cfg(target_os = "android")]
 mod filework;
 #[cfg(target_os = "android")]
+mod handover;
+#[cfg(target_os = "android")]
+mod logd;
+#[cfg(target_os = "android")]
 mod haptics;
 #[cfg(target_os = "android")]
 mod input;
@@ -77,6 +81,13 @@ enum Cmd {
         #[arg(long, default_value = "/skyward/device.toml")]
         config: String,
         names: Vec<String>,
+    },
+    /// Bring the phone's WLAN up as the WLAN page's switch does, scan for
+    /// networks and say what came up.
+    #[cfg(target_os = "android")]
+    Wlan {
+        #[arg(long, default_value = "/skyward/device.toml")]
+        config: String,
     },
     /// Run as the recovery service (what init starts as /system/bin/recovery).
     Recovery,
@@ -245,6 +256,17 @@ fn main() -> Result<()> {
             for path in load_modules(&cfg, &names)? {
                 println!("{}", path.display());
             }
+            Ok(())
+        }
+        #[cfg(target_os = "android")]
+        Cmd::Wlan { config } => {
+            let cfg = DeviceConfig::load(&config)?;
+            let wlan = cfg.wlan.as_ref().with_context(|| format!("{config} describes no WLAN"))?;
+            let dirs = cfg.modules.sources.iter().map(|s| skyward_modules::source_dir(s)).collect::<Result<Vec<_>>>()?;
+            wlan::bring_up_and_scan(wlan, &dirs)?;
+            let mac = skyward_net::iface::hardware_address(&wlan.interface)?;
+            let mac = mac.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(":");
+            println!("{} is up, at {mac}", wlan.interface);
             Ok(())
         }
         Cmd::Recovery => recovery(),
@@ -519,6 +541,18 @@ fn load_modules(cfg: &DeviceConfig, names: &[String]) -> Result<Vec<PathBuf>> {
 /// be made out, the phone's devices are up before that is said.
 #[cfg(target_os = "android")]
 fn bring_up(cfg: &DeviceConfig, slot: skyward_vab::Slot, found: Result<keys::Found>) -> Result<()> {
+    // The driver's own filesystem holds the nodes the hardware services
+    // are reached by, and the phone's init may have mounted it only to
+    // reset the data partition.
+    skyward_binder::driver::mount().context("mount the binder driver's filesystem")?;
+    // The recovery's init leaves the service directory stopped; the
+    // phone's own programs register with it, and the directory has to be
+    // told what they are before they start.
+    if crate::services::running("/system/bin/servicemanager").is_none() {
+        skyward_sys::set_prop("ctl.start", "servicemanager").context("start the service directory")?;
+        skyward_sys::wait_prop("init.svc.servicemanager", "running", std::time::Duration::from_secs(5))
+            .context("wait for the service directory")?;
+    }
     let nodes = skyward_sys::ueventd::apply()?;
     skyward_sys::kmsg(&format!("{nodes} device nodes given the owner their phone describes"))?;
     let props = skyward_info::installed_props(slot)?;
@@ -546,8 +580,11 @@ fn bring_up(cfg: &DeviceConfig, slot: skyward_vab::Slot, found: Result<keys::Fou
         skyward_sys::kmsg(&format!("loaded {}", path.display()))?;
     }
     if !cfg.owners.is_empty() {
-        let handed = hand_over(&cfg.owners)?;
-        skyward_sys::kmsg(&format!("{handed} of the phone's own files handed to the accounts its init gives them"))?;
+        let given = handover::give(&cfg.owners)?;
+        skyward_sys::kmsg(&format!("{} of the phone's own files handed to the accounts its init gives them", given.handed))?;
+        if !given.missing.is_empty() {
+            skyward_sys::kmsg(&format!("{} of them the kernel made none of this boot: {}", given.missing.len(), given.missing.join(", ")))?;
+        }
     }
     // What the phone describes is known wherever its partitions could be
     // read at all; what they say of its keys may still not be.
@@ -636,10 +673,6 @@ fn hand_over(owners: &[skyward_config::Owners]) -> Result<usize> {
 #[cfg(target_os = "android")]
 const RECOVERY_LIBRARIES: &str = "/system/lib64";
 
-/// How long logd may take to say it is ready once started.
-#[cfg(target_os = "android")]
-const LOGD_READY: std::time::Duration = std::time::Duration::from_secs(5);
-
 /// Give the recovery's own logd the libraries of the installed system it
 /// loads, and start it at once rather than on init's next try, so that it
 /// keeps what the phone's own programs log from their start. Each library
@@ -647,8 +680,8 @@ const LOGD_READY: std::time::Duration = std::time::Duration::from_secs(5);
 /// renamed into place, so a logd an earlier run of the recovery service
 /// started keeps the copy it has open.
 #[cfg(target_os = "android")]
-fn start_logd(logd: &skyward_config::Logd) -> Result<()> {
-    for library in &logd.libraries {
+fn start_logd(wanted: &skyward_config::Logd) -> Result<()> {
+    for library in &wanted.libraries {
         let from = Path::new(library);
         let to = Path::new(RECOVERY_LIBRARIES).join(from.file_name().expect("the configuration names each library's file"));
         let mut part = to.clone().into_os_string();
@@ -656,10 +689,24 @@ fn start_logd(logd: &skyward_config::Logd) -> Result<()> {
         std::fs::copy(from, &part).with_context(|| format!("copy {library} to {}", Path::new(&part).display()))?;
         std::fs::rename(&part, &to).with_context(|| format!("put {} in place", to.display()))?;
     }
-    skyward_sys::set_prop("ctl.start", "logd")?;
-    skyward_sys::wait_prop("logd.ready", "true", LOGD_READY)?;
-    skyward_sys::kmsg(&format!("logd runs with {} libraries of the installed system", logd.libraries.len()))
+    // The phone's own recovery starts logd itself as it boots, as the logd
+    // account, and the daemon sets its own scheduling cgroup as it starts,
+    // which only root may write. Where that one is not up by the time this
+    // runs, the daemon is started here instead, on sockets made the way
+    // init makes them.
+    if skyward_sys::prop("logd.ready").as_deref() == Some("true") {
+        return skyward_sys::kmsg(&format!("logd runs with {} libraries of the installed system", wanted.libraries.len()));
+    }
+    let _ = skyward_sys::set_prop("ctl.stop", "logd");
+    let started = logd::Logd::start()?;
+    *LOGD_RUNNING.lock().expect("the log daemon is not held by a thread that panicked") = Some(started);
+    skyward_sys::kmsg(&format!("logd runs with {} libraries of the installed system, started by Skyward", wanted.libraries.len()))
 }
+
+/// The log daemon where Skyward started it, kept for as long as the
+/// recovery runs.
+#[cfg(target_os = "android")]
+static LOGD_RUNNING: std::sync::Mutex<Option<logd::Logd>> = std::sync::Mutex::new(None);
 
 /// Have the parts of the secure world that keep keys agree on the key they
 /// sign their notes with, where the phone has any that do. Android's key

@@ -1,9 +1,10 @@
 use anyhow::{bail, Context, Result};
 
 /// The mark libbinder writes into every call header. Both ends have to agree
-/// on it: it tells apart the copies of libbinder a phone carries, and the one
-/// the recovery's own programs are built from is the recovery copy.
-const HEADER: i32 = i32::from_be_bytes(*b"RECO");
+/// on it: it tells apart the copies of libbinder a phone carries. The system
+/// copy packs "SYST", the vendor copy "VNDR".
+const HEADER_SYSTEM: i32 = i32::from_be_bytes(*b"SYST");
+const HEADER_VENDOR: i32 = i32::from_be_bytes(*b"VNDR");
 
 /// Strict mode gathers violations rather than acting on them; a caller with
 /// no policy of its own still sets that bit.
@@ -73,10 +74,20 @@ impl Parcel {
     /// A call to `interface`, opened with the header libbinder reads before
     /// it looks at anything the method itself takes.
     pub fn call(interface: &str) -> Parcel {
+        Parcel::call_with(interface, HEADER_SYSTEM)
+    }
+
+    /// A call to a service built against the vendor copy of libbinder, which
+    /// the phone's own hardware services are.
+    pub fn call_vendor(interface: &str) -> Parcel {
+        Parcel::call_with(interface, HEADER_VENDOR)
+    }
+
+    fn call_with(interface: &str, header: i32) -> Parcel {
         let mut p = Parcel::default();
         p.i32(STRICT_MODE_PENALTY_GATHER);
         p.i32(UNSET_WORK_SOURCE);
-        p.i32(HEADER);
+        p.i32(header);
         p.string(interface);
         p
     }
@@ -312,7 +323,7 @@ mod tests {
         let mut r = Reader::new(p.bytes());
         assert_eq!(r.i32().unwrap(), i32::MIN, "strict mode gathers");
         assert_eq!(r.i32().unwrap(), -1, "no work source");
-        assert_eq!(r.i32().unwrap(), 0x5245_434f, "the recovery's mark, RECO");
+        assert_eq!(r.i32().unwrap(), HEADER_SYSTEM, "the system mark, SYST");
         assert_eq!(r.string().unwrap(), "a.b.IC");
         assert_eq!(r.here(), p.bytes().len(), "the header is all of it");
     }
@@ -369,6 +380,16 @@ mod tests {
         let mut left_out = Parcel::default();
         left_out.opt_blob(None);
         assert!(Reader::new(left_out.bytes()).blob().is_err(), "where one has to be there");
+    }
+
+    #[test]
+    fn a_vendor_call_opens_with_the_vendor_mark() {
+        let p = Parcel::call_vendor("a.b.IC");
+        let mut r = Reader::new(p.bytes());
+        assert_eq!(r.i32().unwrap(), i32::MIN, "strict mode gathers");
+        assert_eq!(r.i32().unwrap(), -1, "no work source");
+        assert_eq!(r.i32().unwrap(), HEADER_VENDOR, "the vendor mark, VNDR");
+        assert_eq!(r.string().unwrap(), "a.b.IC");
     }
 
     #[test]

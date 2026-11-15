@@ -4,6 +4,8 @@
 
 mod image;
 mod ramdisk;
+mod vendor;
 
 pub use image::BootImage;
 pub use ramdisk::{lz4_legacy, Entry, Ramdisk};
+pub use vendor::{TableEntry, VendorBootImage};

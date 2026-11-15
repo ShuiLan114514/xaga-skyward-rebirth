@@ -40,23 +40,39 @@ impl Described {
         }
     }
 
-    /// The service of the newer kind registered under `name`, which reads
-    /// as the package, the interface and then which of them it is; its
-    /// version is no part of its name.
+    /// The service registered under `name`, which reads as the package, the
+    /// interface and then which of them it is. A package given at a version,
+    /// as the older kind names its services, gives one of those, whose
+    /// version is part of its name; the newer kind has no version in its
+    /// name, and is given none.
     pub fn named(name: &str) -> Result<Described> {
-        let parts = name.rsplit_once('/').and_then(|(interface, instance)| interface.rsplit_once('.').map(|(package, interface)| (package, interface, instance)));
-        let (package, interface, instance) = parts.with_context(|| format!("{name} does not read as a package, an interface and which of them it is"))?;
-        ensure!(![package, interface, instance].iter().any(|part| part.is_empty() || part.contains(['<', '>', '&', '@', ':'])), "{name} is not how a service of the newer kind is named");
-        Ok(Described { kind: Kind::Aidl, package: package.into(), version: None, interface: interface.into(), instance: instance.into() })
+        let (rest, instance) = name.rsplit_once('/').with_context(|| format!("{name} does not read as a package, an interface and which of them it is"))?;
+        let described = match rest.split_once('@') {
+            Some((package, versioned)) => {
+                let (version, interface) = versioned.split_once("::").with_context(|| format!("{name} names a version without an interface"))?;
+                ensure!(!version.is_empty() && version.chars().all(|c| c.is_ascii_digit() || c == '.'), "{name} names a version that is none");
+                Described { kind: Kind::Hidl, package: package.into(), version: Some(version.into()), interface: interface.into(), instance: instance.into() }
+            }
+            None => {
+                let (package, interface) = rest.rsplit_once('.').with_context(|| format!("{name} does not read as a package, an interface and which of them it is"))?;
+                ensure!(![package, interface].iter().any(|part| part.is_empty() || part.contains(['<', '>', '&', '@', ':'])), "{name} is not how a service is named");
+                Described { kind: Kind::Aidl, package: package.into(), version: None, interface: interface.into(), instance: instance.into() }
+            }
+        };
+        let parts = [&described.package, &described.interface, &described.instance];
+        ensure!(!parts.iter().any(|part| part.is_empty() || part.contains(['<', '>', '&', '"', '\\'])), "{name} holds a character a name may not");
+        Ok(described)
     }
 }
 
-/// A description that tells of the services of the newer kind registered
-/// under `names`, each once, as what the running system offers. A recovery
-/// has no framework of its own, and gives its service directory what the
-/// phone's own programs register in the place the framework's descriptions
-/// are read from: the directory takes a description that says it is the
-/// phone's own there for none at all.
+/// A description that tells of the services registered under `names`, each
+/// once, as what the running system offers: a name at a version is a
+/// service of the older kind, reached over the directory for hardware
+/// services, and any other is one of the newer. A recovery has no framework
+/// of its own, and gives its service directory what the phone's own
+/// programs register in the place the framework's descriptions are read
+/// from: the directory takes a description that says it is the phone's own
+/// there for none at all.
 pub fn offering(names: &[String]) -> Result<String> {
     let mut out = String::from("<manifest version=\"1.0\" type=\"framework\">\n");
     let mut told: Vec<&String> = Vec::new();
@@ -66,10 +82,23 @@ pub fn offering(names: &[String]) -> Result<String> {
         }
         told.push(name);
         let service = Described::named(name)?;
-        out.push_str("    <hal format=\"aidl\">\n");
-        out.push_str(&format!("        <name>{}</name>\n", service.package));
-        out.push_str(&format!("        <fqname>{}/{}</fqname>\n", service.interface, service.instance));
-        out.push_str("    </hal>\n");
+        match (service.kind, &service.version) {
+            // The older kind is named at its version, and reached over the
+            // directory for hardware services rather than this one.
+            (Kind::Hidl, Some(version)) => {
+                out.push_str("    <hal format=\"hidl\">\n");
+                out.push_str(&format!("        <name>{}</name>\n", service.package));
+                out.push_str("        <transport>hwbinder</transport>\n");
+                out.push_str(&format!("        <fqname>@{version}::{}/{}</fqname>\n", service.interface, service.instance));
+                out.push_str("    </hal>\n");
+            }
+            _ => {
+                out.push_str("    <hal format=\"aidl\">\n");
+                out.push_str(&format!("        <name>{}</name>\n", service.package));
+                out.push_str(&format!("        <fqname>{}/{}</fqname>\n", service.interface, service.instance));
+                out.push_str("    </hal>\n");
+            }
+        }
     }
     out.push_str("</manifest>\n");
     Ok(out)
@@ -202,16 +231,19 @@ mod tests {
             "android.hardware.security.keymint.IRemotelyProvisionedComponent/default",
             "android.hardware.secure_element.ISecureElement/eSE1",
             "android.hardware.security.keymint.IKeyMintDevice/default",
+            "android.hardware.gatekeeper@1.0::IGatekeeper/default",
         ]
         .map(str::to_string)
         .to_vec();
         let text = offering(&names).unwrap();
         assert!(text.starts_with("<manifest version=\"1.0\" type=\"framework\">\n"), "as what the running system offers");
         let read: Vec<Described> = read(&text).unwrap();
-        assert_eq!(read.iter().map(Described::name).collect::<Vec<_>>(), names[..3]);
-        assert!(read.iter().all(|d| d.kind == Kind::Aidl && d.version.is_none()));
+        let once: Vec<String> = [names[0].clone(), names[1].clone(), names[2].clone(), names[4].clone()].to_vec();
+        assert_eq!(read.iter().map(Described::name).collect::<Vec<_>>(), once, "each service once, the one named twice told once");
+        assert!(read[..3].iter().all(|d| d.kind == Kind::Aidl && d.version.is_none()));
+        assert_eq!((read[3].kind, read[3].version.as_deref()), (Kind::Hidl, Some("1.0")), "a name at a version is one of the older kind");
         assert_eq!(offering(&[]).unwrap(), "<manifest version=\"1.0\" type=\"framework\">\n</manifest>\n");
-        for name in ["android.hardware.gatekeeper@1.0::IGatekeeper/default", "IWeaver/default", "android.hardware.weaver.IWeaver", "a.<b>.IA/default", "a.IA/"] {
+        for name in ["IWeaver/default", "android.hardware.weaver.IWeaver", "a.<b>.IA/default", "a.IA/", "a.IA@::x/default"] {
             assert!(offering(&[name.to_string()]).is_err(), "{name} names no service of the newer kind");
         }
     }

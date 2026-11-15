@@ -152,15 +152,22 @@ pub fn is_skyward<R: Read + Seek>(file: &mut R) -> Result<bool> {
 pub fn device_config<R: Read + Seek>(file: &mut R) -> Result<Option<Vec<u8>>> {
     let mut head = Vec::with_capacity(4096);
     file.take(4096).read_to_end(&mut head).context("read the image's first bytes")?;
-    if !head.starts_with(BOOT_MAGIC) {
+    let (position, size) = if head.starts_with(BOOT_MAGIC) {
+        let header = Header::parse(&mut Cursor::new(&head)).context("read the boot image header")?;
+        (header.ramdisk_position() as u64, u64::from(header.ramdisk_size()))
+    } else if head.starts_with(VENDOR_BOOT_MAGIC) {
+        // A vendor boot image, as a phone whose recovery rides there keeps
+        // its recovery in; its vendor ramdisk holds the configuration.
+        let header = VendorHeader::read(&mut Cursor::new(&head)).context("read the vendor boot image header")?;
+        (header.ramdisk_position() as u64, u64::from(header.vendor_ramdisk_size))
+    } else {
+        return Ok(None);
+    };
+    if size == 0 {
         return Ok(None);
     }
-    let header = Header::parse(&mut Cursor::new(&head)).context("read the boot image header")?;
-    if header.ramdisk_size() == 0 {
-        return Ok(None);
-    }
-    file.seek(SeekFrom::Start(header.ramdisk_position() as u64)).context("seek to the ramdisk")?;
-    let mut ramdisk = BufReader::new(file.take(u64::from(header.ramdisk_size())));
+    file.seek(SeekFrom::Start(position)).context("seek to the ramdisk")?;
+    let mut ramdisk = BufReader::new(file.take(size));
     let start = ramdisk.fill_buf().context("read the ramdisk's first bytes")?;
     if ![LZ4_LEGACY, LZ4_FRAME, GZIP, NEWC].iter().any(|magic| start.starts_with(magic)) {
         return Ok(None);
@@ -379,6 +386,53 @@ mod tests {
         assert_eq!(config, b"[device]\ncodename = \"ishtar\"\n");
         assert!(is_skyward(&mut Cursor::new(skyward_for("ishtar"))).unwrap());
         assert_eq!(device_config(&mut Cursor::new(recovery(false))).unwrap(), None);
+    }
+
+    #[test]
+    fn a_vendor_boot_image_carrying_skyward_is_told_from_the_stock_one() {
+        let config = b"[device]\ncodename = \"xaga\"\n";
+        let mut out = Vec::new();
+        for (name, data) in [("init", &b""[..]), ("system/bin/recovery", b""), ("skyward/device.toml", config)] {
+            let mut entry = cpio::NewcBuilder::new(name).mode(0o100644).write(out, data.len() as u32);
+            entry.write_all(data).unwrap();
+            out = entry.finish().unwrap();
+        }
+        let ramdisk = lz4_legacy(&cpio::newc::trailer(out).unwrap());
+        let vendor = |ramdisk: Vec<u8>| skyward_bootimg::VendorBootImage {
+            header: VendorHeader {
+                page_size: 4096,
+                kernel_addr: 0,
+                ramdisk_addr: 0,
+                vendor_ramdisk_size: ramdisk.len() as u32,
+                cmdline: Box::new([0; 2048]),
+                tags_addr: 0,
+                board_name: [0; 16],
+                dtb_size: 0,
+                dtb_addr: 0,
+                v4: Some(VendorHeaderV4 {
+                    vendor_ramdisk_table_size: 0,
+                    vendor_ramdisk_table_entry_num: 1,
+                    vendor_ramdisk_table_entry_size: 108,
+                    bootconfig_size: 0,
+                }),
+            },
+            table: vec![skyward_bootimg::TableEntry {
+                size: ramdisk.len() as u32,
+                offset: 0,
+                kind: 3,
+                name: [0; 32],
+                board_id: [[0; 16]; 4],
+            }],
+            ramdisk,
+            dtb: Vec::new(),
+            bootconfig: Vec::new(),
+        };
+        let skyward = vendor(ramdisk).to_bytes().unwrap();
+        assert_eq!(kind_of(&skyward).unwrap(), Some(ImageKind::VendorBoot));
+        assert!(is_skyward(&mut Cursor::new(&skyward)).unwrap());
+        assert_eq!(device_config(&mut Cursor::new(&skyward)).unwrap().unwrap(), config);
+        let stock = vendor(lz4_legacy(&archive(&["init"]))).to_bytes().unwrap();
+        assert!(!is_skyward(&mut Cursor::new(stock)).unwrap());
     }
 
     #[test]

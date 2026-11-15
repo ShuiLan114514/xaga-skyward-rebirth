@@ -32,6 +32,26 @@ pub fn wall(rtc_s: u64, offset_ms: u64) -> u64 {
     rtc_s * 1000 + offset_ms
 }
 
+/// The span a phone that keeps its own time can be at, in Unix milliseconds:
+/// from before this recovery was written to after any clock still set by
+/// hand. A time outside it is one nothing good can be done with.
+pub const EARLIEST: u64 = 1_577_836_800_000; // 2020-01-01
+pub const LATEST: u64 = 2_208_988_800_000; // 2040-01-01
+
+/// The time to set, given what the RTC counted and the offset the time daemon
+/// left: the sum, unless it lands outside [`EARLIEST`]..[`LATEST`] while the
+/// RTC's own count lands inside, which is a stored offset gone wrong — a
+/// phone that runs a system not its own can have one ahead by decades, and a
+/// clock ahead of the certificates websites show breaks every one of them.
+pub fn choose(rtc_s: u64, offset_ms: u64) -> u64 {
+    let summed = wall(rtc_s, offset_ms);
+    let counted = rtc_s * 1000;
+    if !(EARLIEST..LATEST).contains(&summed) && (EARLIEST..LATEST).contains(&counted) {
+        return counted;
+    }
+    summed
+}
+
 /// Set the system clock to the real time and return it, in Unix
 /// milliseconds: the RTC's count plus the offset Android left on persist.
 #[cfg(target_os = "android")]
@@ -56,7 +76,7 @@ pub fn set_from_rtc() -> Result<u64> {
     let offset_ms = offset(&read?)?;
     let rtc = fs::read_to_string(RTC).with_context(|| format!("read {RTC}"))?;
     let rtc_s: u64 = rtc.trim().parse().with_context(|| format!("{RTC} holds {rtc:?}"))?;
-    let now = wall(rtc_s, offset_ms);
+    let now = choose(rtc_s, offset_ms);
     let ts = libc::timespec { tv_sec: (now / 1000) as libc::time_t, tv_nsec: ((now % 1000) * 1_000_000) as libc::c_long };
     if unsafe { libc::clock_settime(libc::CLOCK_REALTIME, &ts) } != 0 {
         return Err(std::io::Error::last_os_error()).context("set the system clock");
@@ -76,6 +96,19 @@ mod tests {
         let held = 1_791_968_239_417u64.to_le_bytes();
         let now = wall(411_912, offset(&held).unwrap());
         assert!(now / 1000 >= 1_792_380_150 && now / 1000 <= 1_792_380_152, "{now}");
+    }
+
+    #[test]
+    fn a_stored_offset_ahead_by_decades_gives_way_to_the_rtc() {
+        // The Redmi Note 11T Pro this port was written for: its RTC counted
+        // the real time, and a system not its own had left an offset that
+        // put the wall clock in 2080.
+        let rtc = 1_794_644_740;
+        assert_eq!(choose(rtc, 1_688_115_833_265), rtc * 1000, "the RTC's own count, which was right");
+        // A phone whose RTC counts from when its power last went: the offset
+        // is the only thing that makes the time.
+        let counted = 411_912;
+        assert_eq!(choose(counted, 1_791_968_239_417), wall(counted, 1_791_968_239_417));
     }
 
     #[test]

@@ -5,7 +5,13 @@ use anyhow::{bail, ensure, Context, Result};
 use serde::Deserialize;
 
 /// Where GitHub answers which release of Skyward is the newest.
-pub const LATEST: &str = "https://api.github.com/repos/kirklin/skyward/releases/latest";
+pub const PROJECT: &str = "kirklin/skyward";
+
+/// Where the latest release of `releases`, which reads as the account and
+/// the repository, is asked about.
+pub fn latest(releases: &str) -> String {
+    format!("https://api.github.com/repos/{releases}/releases/latest")
+}
 
 /// The version of GitHub's API the answer is read as.
 const API_VERSION: &str = "2022-11-28";
@@ -69,7 +75,7 @@ struct Message {
     message: String,
 }
 
-/// The newest release that `answer`, GitHub's answer at [`LATEST`], tells
+/// The newest release that `answer`, GitHub's answer at [`latest`], tells
 /// of, and its zip for the phone `codename` names, as the build of version
 /// `running` sees it.
 pub fn newest(answer: &str, codename: &str, running: &str) -> Result<Newest> {
@@ -94,16 +100,17 @@ pub fn newest(answer: &str, codename: &str, running: &str) -> Result<Newest> {
 
 /// Ask GitHub for Skyward's newest release, and its zip for the phone
 /// `codename` names, as the build of version `running`.
-pub fn ask(agent: &ureq::Agent, codename: &str, running: &str) -> Result<Newest> {
+pub fn ask(agent: &ureq::Agent, releases: &str, codename: &str, running: &str) -> Result<Newest> {
+    let url = latest(releases);
     let mut response = agent
-        .get(LATEST)
+        .get(&url)
         .header("Accept", "application/vnd.github+json")
         .header("X-GitHub-Api-Version", API_VERSION)
         .header("User-Agent", format!("Skyward/{running}"))
         .call()
-        .with_context(|| format!("ask {LATEST}"))?;
+        .with_context(|| format!("ask {url}"))?;
     let status = response.status();
-    let body = response.body_mut().read_to_string().with_context(|| format!("read the answer of {LATEST}"))?;
+    let body = response.body_mut().read_to_string().with_context(|| format!("read the answer of {url}"))?;
     if !status.is_success() {
         bail!(refusal(status, &body));
     }

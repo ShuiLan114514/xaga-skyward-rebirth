@@ -14,7 +14,7 @@ use skyward_net::wlan::{self, Joined, Link, Next, Power, Stage, Traffic, Wlan};
 use skyward_sys::worker::{self, Teller};
 use std::fs;
 use std::net::Ipv4Addr;
-use std::os::fd::RawFd;
+use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command as Process, Stdio};
@@ -41,6 +41,25 @@ const WIFI: u32 = 1010;
 /// How long the driver may take to make its interface, the chip's firmware
 /// loading meanwhile.
 const INTERFACE_WAIT: Duration = Duration::from_secs(20);
+
+/// How long the chip's own settings may take to be written once the
+/// driver's node is there, which the phone's assistant does.
+const SETTINGS_WAIT: Duration = Duration::from_secs(20);
+
+/// How long a scan may be turned away before the phone gives up on one.
+const SCAN_WAIT: Duration = Duration::from_secs(15);
+
+/// How long a scan may take to list what it found once the chip has taken
+/// it.
+const SCAN_SETTLE: Duration = Duration::from_secs(20);
+
+/// How long the drivers may take to make their nodes once the modules are
+/// loaded.
+const NODE_WAIT: Duration = Duration::from_secs(10);
+
+/// Where the bring-up is held, which the phone's own programs and a
+/// command run over adb can both reach.
+const RUN: &str = "/skyward/run";
 
 /// How long the supplicant may take to open its control socket.
 const SOCKET_WAIT: Duration = Duration::from_secs(10);
@@ -622,25 +641,182 @@ impl Station {
 
 /// Load the driver where its interface is not there yet, and bring the
 /// interface up.
-fn bring_up(cfg: &Config, modules: &[PathBuf]) -> Result<()> {
+///
+/// A chip whose connectivity part has only just been started runs its
+/// calibration on the first switch-on, which fails, so the switch-on is made
+/// more than once where the phone asks for it. The chip's settings are
+/// written by the phone's own assistant, which waits for the driver's node
+/// and writes them a moment after it comes up; the switch-on waits for the
+/// property it sets, so that the driver has settings to read.
+pub(crate) fn bring_up(cfg: &Config, modules: &[PathBuf]) -> Result<()> {
+    let _one_at_a_time = BringingUp::take()?;
+    bring_up_driver(cfg, modules)
+}
+
+/// The one bring-up at a time: the WLAN page's switch and a command run
+/// over adb are programs of their own, and two at once switch the chip on
+/// twice over and leave one of them waiting for an interface the other
+/// already made.
+struct BringingUp {
+    /// Held open for as long as the bring-up takes; the lock goes when it
+    /// is closed.
+    _kept: std::fs::File,
+}
+
+impl BringingUp {
+    fn take() -> Result<BringingUp> {
+        let folder = Path::new(RUN);
+        fs::create_dir_all(folder).with_context(|| format!("make {}", folder.display()))?;
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(folder.join("wlan"))
+            .context("open where the WLAN's bring-up is kept")?;
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+            bail!("the WLAN is being brought up already");
+        }
+        Ok(BringingUp { _kept: file })
+    }
+}
+
+/// Load the driver where its interface is not there yet, and bring the
+/// interface up, with the bring-up already this program's.
+fn bring_up_driver(cfg: &Config, modules: &[PathBuf]) -> Result<()> {
     let net = Path::new("/sys/class/net").join(&cfg.interface);
     if !net.exists() {
+        for mount in &cfg.mounts {
+            let at = Path::new(&mount.at);
+            if skyward_block::mount::is_mount_point(at)? {
+                continue;
+            }
+            fs::create_dir_all(at).with_context(|| format!("make {}", at.display()))?;
+            let device = Path::new(skyward_block::BY_NAME).join(&mount.partition);
+            skyward_block::mount::mount_ro(&device, at).with_context(|| format!("mount {} for the WLAN", mount.partition))?;
+        }
         for file in &cfg.firmware {
             place(file)?;
         }
         for path in skyward_modules::load(modules, &cfg.modules)? {
             skyward_sys::kmsg(&format!("loaded {}", path.display()))?;
         }
-        for w in &cfg.writes {
-            fs::write(&w.path, &w.value).with_context(|| format!("write {} to {}", w.value, w.path))?;
+        // The drivers make their nodes a moment after the modules are in,
+        // and a recovery's ueventd makes them root's alone while the
+        // phone's own programs run under other accounts.
+        crate::handover::wait_for_nodes(&cfg.nodes, NODE_WAIT);
+        crate::handover::give(&cfg.nodes)?;
+        // What writes the chip's settings waits for the driver's node and
+        // writes them once, so a bring-up later in the same boot finds the
+        // property already set and has nothing to wait for.
+        if let Some(settings) = &cfg.settings {
+            let written = skyward_sys::prop(&settings.property).as_deref() == Some(settings.value.as_str());
+            if !written {
+                // A driver that never gets them starts with its own, which
+                // is worth saying but not worth leaving the WLAN off for.
+                if let Err(e) = skyward_sys::wait_prop(&settings.property, &settings.value, SETTINGS_WAIT) {
+                    let _ = skyward_sys::kmsg(&format!("the chip's settings are not written yet: {e:#}"));
+                }
+            }
         }
-        let until = Instant::now() + INTERFACE_WAIT;
-        while !net.exists() {
-            ensure!(Instant::now() < until, "the driver made no {} in {} seconds", cfg.interface, INTERFACE_WAIT.as_secs());
-            thread::sleep(Duration::from_millis(100));
+        let tries = cfg.attempts.max(1);
+        let mut refused = None;
+        for attempt in 1..=tries {
+            refused = None;
+            for w in &cfg.writes {
+                if let Err(e) = fs::write(&w.path, &w.value) {
+                    // A chip that will not start answers so in its own
+                    // words; the interface is waited for all the same.
+                    let _ = skyward_sys::kmsg(&format!("the WLAN did not take {}: {e}", w.value));
+                    refused = Some(format!("writing {} to {} was refused: {e}", w.value, w.path));
+                }
+            }
+            // A chip that refuses the write has often begun starting all
+            // the same, so the interface is waited for just as long.
+            let until = Instant::now() + INTERFACE_WAIT;
+            while !net.exists() && Instant::now() < until {
+                thread::sleep(Duration::from_millis(100));
+            }
+            if net.exists() {
+                break;
+            }
+            if attempt < tries {
+                let _ = skyward_sys::kmsg(&format!("{} did not come up on try {attempt} of {tries}", cfg.interface));
+            }
+        }
+        if !net.exists() {
+            match refused {
+                Some(refused) => bail!("the driver made no {} in {tries} tries, and {refused}", cfg.interface),
+                None => bail!("the driver made no {} in {tries} tries", cfg.interface),
+            }
         }
     }
     iface::set_up(&cfg.interface, true)
+}
+
+/// Bring the interface up and have the phone's own supplicant look for
+/// networks on it, as the WLAN page does when its switch is turned on, so
+/// that a phone reached over adb can be checked without anyone touching the
+/// screen. The supplicant is ended afterwards.
+pub(crate) fn bring_up_and_scan(cfg: &Config, modules: &[PathBuf]) -> Result<()> {
+    let _one_at_a_time = BringingUp::take()?;
+    bring_up_driver(cfg, modules)?;
+    let libraries = crate::secure::libraries().unwrap_or_else(|e| {
+        let _ = skyward_sys::kmsg(&format!("the vendor interface's libraries are not open: {e:#}"));
+        None
+    });
+    let mut child = start_supplicant(cfg, libraries.as_deref())?;
+    let socket = Path::new(HOME).join("sockets").join(&cfg.interface);
+    let scanned = (|| -> Result<Vec<Bss>> {
+        let control = Control::open(&socket)?;
+        ensure!(control.ask("PING")?.trim_end() == "PONG", "wpa_supplicant does not answer PING");
+        // A chip still settling turns a scan away, so it is asked again now
+        // and then until it takes one.
+        let until = Instant::now() + SCAN_WAIT;
+        loop {
+            match control.order("SCAN") {
+                Ok(()) => break,
+                Err(e) => {
+                    ensure!(Instant::now() < until, "ask for a scan: {e:#}");
+                    thread::sleep(Duration::from_secs(1));
+                }
+            }
+        }
+        // The access points are listed a few seconds after the scan is
+        // taken, so the list is asked for until one comes or the wait ends.
+        let until = Instant::now() + SCAN_SETTLE;
+        let answer = loop {
+            let answer = control.ask("SCAN_RESULTS")?;
+            if answer.lines().count() > 1 || Instant::now() >= until {
+                break answer;
+            }
+            thread::sleep(Duration::from_millis(500));
+        };
+        let mut found = Vec::new();
+        for line in answer.lines().skip(1) {
+            let mut fields = line.split('\t');
+            let (Some(bssid), Some(frequency), Some(signal), Some(flags), Some(ssid)) =
+                (fields.next(), fields.next(), fields.next(), fields.next(), fields.next())
+            else {
+                continue;
+            };
+            found.push(Bss {
+                id: found.len() as u32,
+                bssid: bssid.to_string(),
+                frequency: frequency.parse().with_context(|| format!("read the frequency of {bssid}"))?,
+                signal: signal.parse().with_context(|| format!("read the signal of {bssid}"))?,
+                security: Security::of(flags),
+                ssid: supplicant::unescape(ssid)?,
+            });
+        }
+        Ok(found)
+    })();
+    end(&mut child, None);
+    let networks = wlan::networks(&scanned?);
+    for network in &networks {
+        println!("{:>4} dBm  {}", network.signal, network.name);
+    }
+    println!("{} networks", networks.len());
+    Ok(())
 }
 
 /// Put a file the driver asks for where the firmware loader looks.

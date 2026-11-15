@@ -46,6 +46,10 @@ pub struct State {
     /// A zip's install script runs only if the zip was signed with one of
     /// the phone's update keys.
     pub check_signature: bool,
+    /// The partition this recovery lives in: a recovery partition of its
+    /// own, or `vendor_boot` on a phone whose recovery rides in the vendor
+    /// boot image.
+    pub recovery_partition: String,
     /// The phone keeps its recovery in a partition of each slot, which the
     /// install page then offers to keep Skyward in.
     pub recovery_partitions: bool,
@@ -207,6 +211,7 @@ impl Default for State {
             package_name: None,
             script_output: Vec::new(),
             check_signature: false,
+            recovery_partition: "recovery".into(),
             recovery_partitions: false,
             keep_recovery: true,
             reflash: None,

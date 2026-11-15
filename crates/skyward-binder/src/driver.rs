@@ -8,6 +8,7 @@ use crate::wire::{
 use crate::wire::{TransactionData, WriteRead};
 use anyhow::{bail, ensure, Context, Result};
 use std::convert::Infallible;
+use std::ffi::CString;
 use std::fs::File;
 use std::os::fd::AsRawFd;
 use std::path::Path;
@@ -20,6 +21,10 @@ const DEVICE: &str = "/dev/binder";
 /// phones have the node itself; newer ones have the driver's own filesystem
 /// and the node inside it.
 const HARDWARE: [&str; 2] = ["/dev/hwbinder", "/dev/binderfs/hwbinder"];
+
+/// Where the binder driver's filesystem is mounted, and the nodes inside it
+/// the drivers are reached by.
+const BINDERFS: &str = "/dev/binderfs";
 
 /// The layout this crate speaks. The driver refuses a program that knows a
 /// different one.
@@ -79,14 +84,51 @@ impl Waiting {
     }
 }
 
+/// Mount the binder driver's filesystem where the phone's own init has not,
+/// as some recoveries mount it only to reset the data partition; the nodes
+/// the programs reach the drivers by are made inside it. A filesystem
+/// already mounted is left as it is.
+pub fn mount() -> Result<()> {
+    std::fs::create_dir_all(BINDERFS).with_context(|| format!("make {BINDERFS}"))?;
+    // The driver's filesystem holds the node the system binder is reached
+    // by; its being there says it is already mounted, and mounting on top
+    // of it would give the programs that use it different drivers.
+    let node = Path::new(BINDERFS).join("binder");
+    if !node.exists() {
+        let c = |text: &str| CString::new(text).expect("a path has no nul in it");
+        let mounted = unsafe { libc::mount(c("binder").as_ptr(), c(BINDERFS).as_ptr(), c("binder").as_ptr(), 0, c("stats=global").as_ptr().cast()) };
+        if mounted != 0 {
+            let e = std::io::Error::last_os_error();
+            if e.raw_os_error() != Some(libc::EBUSY) {
+                return Err(e).with_context(|| format!("mount binderfs on {BINDERFS}"));
+            }
+        }
+    }
+    for name in ["binder", "hwbinder", "vndbinder"] {
+        let node = format!("{BINDERFS}/{name}");
+        let target = format!("/dev/{name}");
+        // The system binder node may be the recovery's own static one.
+        // The hardware and vendor drivers have no other node, so they are
+        // pointed at the filesystem's.
+        if !Path::new(&target).exists() {
+            std::os::unix::fs::symlink(&node, &target).with_context(|| format!("point {target} at {node}"))?;
+        }
+        let _ = std::fs::set_permissions(&node, std::os::unix::fs::PermissionsExt::from_mode(0o666));
+    }
+    ensure!(Path::new(DEVICE).exists(), "no binder driver at {DEVICE}");
+    Ok(())
+}
+
 impl Binder {
     pub fn open() -> Result<Binder> {
+        mount()?;
         Binder::on(Path::new(DEVICE), None)
     }
 
     /// The driver the phone's hardware services talk over, which is a
     /// second one of the same kind.
     pub fn hardware() -> Result<Binder> {
+        mount()?;
         let node = HARDWARE
             .iter()
             .map(Path::new)

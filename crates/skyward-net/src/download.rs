@@ -20,6 +20,21 @@ pub enum Sum {
     Sha256(String),
 }
 
+/// What the phone has for files to grow into, in bytes, as the kernel says:
+/// what a program may ask for without the phone starting to swap out what it
+/// runs.
+fn memory() -> Option<u64> {
+    let info = fs::read_to_string("/proc/meminfo").ok()?;
+    available(&info)
+}
+
+/// The `MemAvailable` a `/proc/meminfo` holds, in bytes.
+fn available(info: &str) -> Option<u64> {
+    let line = info.lines().find(|line| line.starts_with("MemAvailable:"))?;
+    let kb: u64 = line.split_whitespace().nth(1)?.parse().ok()?;
+    Some(kb * 1024)
+}
+
 /// Where a package is downloaded to until it is whole and checked.
 pub fn partial(path: &Path) -> PathBuf {
     let mut name = path.file_name().expect("a package has a name").to_os_string();
@@ -138,7 +153,11 @@ fn fetch_as<D: Digest>(agent: &ureq::Agent, url: &str, path: &Path, sum: &str, s
         file.set_len(0).with_context(|| format!("empty {}", part.display()))?;
         have = 0;
     }
-    let room = skyward_block::mount::space(dir).with_context(|| format!("read the free space of {}", dir.display()))?.available;
+    let space = skyward_block::mount::space(dir).with_context(|| format!("read the free space of {}", dir.display()))?;
+    // A ramfs, which the recovery's own root is, has no size to say: what it
+    // may hold is the phone's memory, which the kernel hands out as files
+    // ask for it.
+    let room = if space.total == 0 { memory().unwrap_or(space.available) } else { space.available };
     if total - have > room {
         bail!(NoRoom { needed: total - have, free: room });
     }
@@ -196,6 +215,14 @@ pub(crate) fn content_length(headers: &ureq::http::HeaderMap) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_memory_left_is_read_from_the_kernels_own_note() {
+        let info = "MemTotal:        7409536 kB\nMemFree:          200000 kB\nMemAvailable:    6824672 kB\n";
+        assert_eq!(available(info), Some(6824672 * 1024), "the line for what may be asked for");
+        assert_eq!(available("MemTotal: 1 kB\n"), None, "a kernel that does not say");
+        assert_eq!(available("MemAvailable: plenty kB\n"), None, "what cannot be read as a number");
+    }
 
     #[test]
     fn a_part_is_named_after_its_package() {
