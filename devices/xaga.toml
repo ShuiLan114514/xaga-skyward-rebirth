@@ -217,10 +217,14 @@ ready_hardware_service = "android.hardware.boot@1.2::IBootControl/default"
 # MediaTek's connectivity bring-up: the loader opens the connectivity
 # driver's node and asks it to set the chip's part of the firmware up, then
 # tells the phone it is ready; the assistant waits for the WLAN driver's
-# node and writes the chip's settings to it. Both are started at boot and
-# wait, so the WLAN's own bring-up is what opens their nodes to them.
+# node and writes the chip's settings to it. Both are started at boot, and
+# the loader runs once: the phone's own init marks it oneshot, and it ends
+# badly once it has done its work, which init does not mind. A shell keeps
+# that from taking the recovery's bring-up with it.
 [[service]]
-path = "/vendor/bin/conninfra_loader"
+path = "/system/bin/sh"
+args = ["-c", "/vendor/bin/conninfra_loader; true"]
+oneshot = true
 libraries = ["/system/lib64", "/vendor/lib64"]
 user = "system"
 groups = ["system"]
@@ -273,7 +277,7 @@ efs = ["nvdata", "nvcfg", "protect1", "protect2", "persist"]
 [wipe]
 logs = ["/data/vendor/mtklog", "/data/vendor/connsyslog"]
 
-# WLAN comes up through the phone's own programs: conninfra_loader and
-# wlan_assistant, started at boot, and the driver switched on by the [wlan]
-# write above. What they need from the installed system is its nvdata
+# WLAN comes up through the phone's own programs: conninfra_loader, run
+# once, and wlan_assistant, started at boot, and the driver switched on by
+# the [wlan] write above. What they need from the installed system is its nvdata
 # partition, which the [wlan] mount provides.
