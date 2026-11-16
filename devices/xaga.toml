@@ -223,7 +223,7 @@ ready_hardware_service = "android.hardware.boot@1.2::IBootControl/default"
 # that from taking the recovery's bring-up with it.
 [[service]]
 path = "/system/bin/sh"
-args = ["-c", "/vendor/bin/conninfra_loader; true"]
+args = ["-c", "/vendor/bin/conninfra_loader & exit 0"]
 oneshot = true
 libraries = ["/system/lib64", "/vendor/lib64"]
 user = "system"
