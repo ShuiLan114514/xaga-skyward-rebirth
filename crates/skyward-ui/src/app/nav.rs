@@ -102,6 +102,10 @@ impl App {
                 self.state.system_pick = None;
                 self.state.asking_delete = false;
             }
+            Screen::BootMenu => {
+                self.state.boot_pick = None;
+                self.state.boot_error = None;
+            }
             Screen::Files => {
                 if let Some(up) = self.state.files.up() {
                     return vec![Effect::ReadDir(up)];
@@ -288,6 +292,7 @@ impl App {
             Screen::Filesystems => vec![Effect::ReadFilesystems],
             Screen::Slot | Screen::Reboot => vec![Effect::ReadSlots],
             Screen::Systems => vec![Effect::ReadSystems],
+            Screen::BootMenu => Vec::new(),
             Screen::Restore => vec![self.find_backups()],
             Screen::Files => vec![Effect::ReadDir(self.state.files.path.clone())],
             Screen::Choose(place) if self.state.place_open(place) => vec![Effect::ReadPlace(place, self.state.folder(s).path.clone())],

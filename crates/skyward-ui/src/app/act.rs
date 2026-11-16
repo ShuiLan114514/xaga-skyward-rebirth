@@ -136,6 +136,12 @@ impl App {
                     self.refresh();
                 }
             }
+            Action::PickBoot(k) => {
+                self.state.boot_pick = Some(k);
+                self.state.boot_error = None;
+                self.state.confirm = 0.0;
+                self.refresh();
+            }
             Action::RebootTo(target) => return vec![Effect::Reboot(target)],
             Action::EnterRecovery => return vec![Effect::EnterRecovery],
             Action::Dismiss => {
@@ -814,6 +820,15 @@ impl App {
                     fx.push(Effect::SwitchSystem(pick));
                     self.state.systems_work = Some(SystemsWork::Switching(pick));
                     self.state.system_pick = None;
+                    self.refresh();
+                }
+            }
+            Confirm::Boot => {
+                if let (Some(menu), Some(pick)) = (&self.state.boot_menu, self.state.boot_pick)
+                    && let Some(entry) = menu.entries.get(pick)
+                {
+                    fx.push(Effect::BootTo { partition: menu.partition.clone(), image: entry.image.clone(), name: entry.name.clone() });
+                    self.state.boot_pick = None;
                     self.refresh();
                 }
             }

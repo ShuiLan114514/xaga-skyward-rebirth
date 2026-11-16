@@ -90,6 +90,37 @@ pub struct DeviceConfig {
     /// The stock build the recovery is made on.
     #[serde(default)]
     pub stock: Option<Stock>,
+    /// The boot images a phone has beside Android, which the recovery may
+    /// write in place of the one it starts from, as the xaga's iOS userland
+    /// is started.
+    #[serde(default)]
+    pub boot_menu: Option<BootMenu>,
+}
+
+/// The boot images a phone can start from, and the partition they are
+/// written to: on xaga, `boot_a`, whose image the bootloader starts, while
+/// `boot_b` keeps Android untouched.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct BootMenu {
+    /// The partition the chosen image is written to, such as `boot_a`.
+    pub partition: String,
+    #[serde(default, rename = "entry")]
+    pub entries: Vec<BootEntry>,
+}
+
+/// One system the boot menu offers: its name, what it is, and the image the
+/// phone's own switch app put on the data partition.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct BootEntry {
+    /// A name stable across starts, such as `ios`.
+    pub id: String,
+    /// What the page calls it, such as `iOS userland`.
+    pub name: String,
+    /// What it is, such as `XNU · APFS iosroot`.
+    #[serde(default)]
+    pub detail: String,
+    /// The image's path, which is on the data partition.
+    pub image: String,
 }
 
 /// The stock build a recovery is made on: the phone maker's full update
@@ -688,6 +719,23 @@ impl DeviceConfig {
             }
         }
         check_given("[[owners]]", &cfg.owners)?;
+        if let Some(menu) = &cfg.boot_menu {
+            let partition = &menu.partition;
+            ensure!(!partition.is_empty() && !partition.contains('/'), "[boot_menu] partition: {partition} is not a partition's name");
+            ensure!(!menu.entries.is_empty(), "[boot_menu] names no system to start");
+            for entry in &menu.entries {
+                ensure!(!entry.id.is_empty() && !entry.id.contains(char::is_whitespace), "[boot_menu] entry: {:?} is not an id", entry.id);
+                ensure!(!entry.name.is_empty(), "[boot_menu] entry {}: no name", entry.id);
+                let image = Path::new(&entry.image);
+                let plain = image.components().all(|c| matches!(c, std::path::Component::RootDir | std::path::Component::Normal(_)));
+                ensure!(image.is_absolute() && plain && image.file_name().is_some(), "[boot_menu] entry {}: {} is not an absolute path to a file", entry.id, entry.image);
+            }
+            let mut ids: Vec<&str> = menu.entries.iter().map(|e| e.id.as_str()).collect();
+            let count = ids.len();
+            ids.sort_unstable();
+            ids.dedup();
+            ensure!(ids.len() == count, "[boot_menu] entries repeat an id");
+        }
         if let Some(stock) = &cfg.stock {
             let name = stock.package.rsplit('/').next().unwrap_or_default();
             ensure!(
@@ -760,6 +808,24 @@ mod tests {
         assert_eq!(vendor.device.recovery_partition, "vendor_boot");
         assert!(DeviceConfig::parse("[device]\ncodename = \"x\"\nrecovery_partition = \"by-name/vendor_boot\"\n").is_err());
         assert!(DeviceConfig::parse("[device]\ncodename = \"x\"\nrecovery_partition = \"\"\n").is_err());
+    }
+
+    #[test]
+    fn the_boot_menu_names_both_its_images_plainly() {
+        let text = include_str!("../../../devices/xaga.toml");
+        let cfg = DeviceConfig::parse(text).unwrap();
+        let menu = cfg.boot_menu.expect("the xaga names its boot images");
+        assert_eq!(menu.partition, "boot_a");
+        assert_eq!(menu.entries.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), ["ios", "android"]);
+        assert_eq!(menu.entries[0].image, "/data/local/tmp/ios-boot.img");
+        assert!(DeviceConfig::parse("[device]\ncodename = \"x\"\n[boot_menu]\npartition = \"boot_a\"\n").is_err(), "no images");
+        assert!(
+            DeviceConfig::parse(
+                "[device]\ncodename = \"x\"\n[boot_menu]\npartition = \"boot_a\"\n[[boot_menu.entry]]\nid = \"a\"\nname = \"A\"\nimage = \"relative.img\"\n"
+            )
+            .is_err(),
+            "a relative image"
+        );
     }
 
     #[test]

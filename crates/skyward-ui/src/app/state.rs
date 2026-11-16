@@ -2,6 +2,24 @@
 
 use super::*;
 
+/// The systems a phone's boot menu offers, and the partition their images
+/// go to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BootMenuView {
+    pub partition: String,
+    pub entries: Vec<BootEntryView>,
+}
+
+/// One system the boot menu offers, and the image the switch app put on the
+/// data partition for it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BootEntryView {
+    pub id: String,
+    pub name: String,
+    pub detail: String,
+    pub image: String,
+}
+
 /// Choices the pages show and the user changes, and where installing
 /// stands.
 #[derive(Clone, Debug, PartialEq)]
@@ -102,6 +120,12 @@ pub struct State {
     /// Why the second system's start stopped, as its first program told
     /// it, which the systems page shows.
     pub system_notice: Option<String>,
+    /// The boot images a phone has beside Android, where it has any.
+    pub boot_menu: Option<BootMenuView>,
+    /// The system picked on the boot menu, whose image a swipe writes.
+    pub boot_pick: Option<usize>,
+    /// Why the boot menu's last write did not go.
+    pub boot_error: Option<String>,
     /// Where the data partition stands, and what is typed at the screen
     /// lock its users' own files wait on.
     pub data: Data,
@@ -231,6 +255,9 @@ impl Default for State {
             dual_boot: false,
             systems: None,
             system_pick: None,
+            boot_menu: None,
+            boot_pick: None,
+            boot_error: None,
             systems_work: None,
             system_notice: None,
             data: Data::Closed,

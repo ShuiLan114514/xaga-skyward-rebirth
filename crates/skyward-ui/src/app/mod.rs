@@ -154,6 +154,9 @@ pub enum Screen {
     /// The installed system and the one Skyward installed beside it: which
     /// of them starts, switching between them, and taking the other away.
     Systems,
+    /// The systems a phone has as boot images beside Android, such as the
+    /// xaga's iOS userland, which the bootloader starts from `boot_a`.
+    BootMenu,
     /// The phone's own fastbootd serving the computer's fastboot, and where
     /// to go from it. Its only page, worked with the keys: the partitions
     /// the touchscreen runs from are left out while fastbootd rewrites
@@ -219,6 +222,9 @@ pub enum Confirm {
     /// Switch to the system picked on the systems page, and restart into
     /// it.
     SwitchSystem,
+    /// Write the boot image picked on the boot menu into its partition, and
+    /// restart into it.
+    Boot,
     /// Take the other system away.
     RemoveSystem,
     /// Install the system the installer holds with the room chosen.
@@ -290,6 +296,8 @@ pub enum Action {
     PickSlot(Slot),
     /// Pick this system to start next; a swipe then switches to it.
     PickSystem(Who),
+    /// Pick this system on the boot menu; a swipe then writes its image.
+    PickBoot(usize),
     /// Give the root of the system being installed the size at this place
     /// in those offered.
     SystemSize(usize),
@@ -458,6 +466,10 @@ pub enum Effect {
     /// into it, telling of a switch that did not go with
     /// [`App::systems_work_failed`].
     SwitchSystem(Who),
+    /// Write `image` into `partition`, which holds the boot image the
+    /// bootloader starts, and restart into it, telling of a write that did
+    /// not go with [`App::boot_failed`].
+    BootTo { partition: String, image: String, name: String },
     /// Take the other system away, telling how it went with
     /// [`App::set_systems`] or [`App::systems_work_failed`].
     RemoveSystem,

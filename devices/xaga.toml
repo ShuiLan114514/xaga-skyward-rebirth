@@ -281,3 +281,22 @@ logs = ["/data/vendor/mtklog", "/data/vendor/connsyslog"]
 # once, and wlan_assistant, started at boot, and the driver switched on by
 # the [wlan] write above. What they need from the installed system is its nvdata
 # partition, which the [wlan] mount provides.
+
+# The xaga's own switch app keeps the iOS userland's boot image and
+# Android's in the data partition and writes the chosen one into boot_a,
+# then restarts; boot_b is never touched. Skyward offers the same here
+# until the official dual-boot path replaces it.
+[boot_menu]
+partition = "boot_a"
+
+[[boot_menu.entry]]
+id = "ios"
+name = "iOS userland"
+detail = "XNU · APFS iosroot"
+image = "/data/local/tmp/ios-boot.img"
+
+[[boot_menu.entry]]
+id = "android"
+name = "Android"
+detail = "HyperOS / Android"
+image = "/data/local/tmp/android-boot.img"

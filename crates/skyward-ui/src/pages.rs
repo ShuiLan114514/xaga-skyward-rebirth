@@ -119,6 +119,7 @@ pub fn render(screen: Screen, cx: &Ctx) -> Frame {
         Screen::FontLicense => font_license(cx),
         Screen::Slot => slot(cx),
         Screen::Systems => systems(cx),
+        Screen::BootMenu => boot_menu(cx),
         Screen::Fastboot => fastboot(cx),
         Screen::Erase => erase(cx),
         Screen::CantStart => cant_start(cx),
@@ -156,6 +157,7 @@ pub fn confirm_label(which: Confirm, s: &State) -> (&'static str, bool) {
         Confirm::Merge => (["滑动以合并", "滑動以合併", "Slide to merge"], true),
         Confirm::Relabel => (["滑动以修复", "滑動以修復", "Slide to fix"], true),
         Confirm::SwitchSystem => (["滑动以切换并重启", "滑動以切換並重新啟動", "Slide to switch and reboot"], false),
+        Confirm::Boot => (["滑动以切换并重启", "滑動以切換並重新啟動", "Slide to switch and reboot"], true),
         Confirm::RemoveSystem => (["滑动以删除", "滑動以刪除", "Slide to remove"], true),
         Confirm::InstallSystem => (INSTALL, false),
     };
@@ -196,6 +198,7 @@ const TIME_ZONE: Text = ["时区", "時區", "Time zone"];
 const LICENSE: Text = ["开源许可", "開放原始碼授權", "Open source licenses"];
 const FONTS: Text = ["界面字体", "介面字型", "UI fonts"];
 const DUAL_BOOT: Text = ["双系统", "雙系統", "Dual boot"];
+const BOOT_SYSTEM: Text = ["启动系统", "啟動系統", "Boot system"];
 
 /// A canvas for a page `h` tall in the colour `bg`, holding the rows `cx`
 /// asks to be drawn.
@@ -291,6 +294,10 @@ pub fn home(cx: &Ctx) -> Frame {
     if let Some(w) = &cx.state.wlan {
         rows.push(Row::new(l.pick(WLAN)).icon(BLUE, Icon::Wlan).trail(Trail::Value(fmt::wlan_value(l, w))));
         opens.push(Action::Open(Screen::Wlan));
+    }
+    if cx.state.boot_menu.is_some() {
+        rows.push(Row::new(l.pick(BOOT_SYSTEM)).icon(PURPLE, Icon::Systems));
+        opens.push(Action::Open(Screen::BootMenu));
     }
     let starts = systems_value(cx);
     if cx.state.offers(Screen::Systems) {
@@ -3623,6 +3630,108 @@ const BOOT_SLOT: Text = ["启动槽位", "啟動槽位", "Boot slot"];
 /// Which slot the phone starts from next, as the boot control holds it,
 /// and what it holds of each; picking the other and swiping switches.
 /// While an update is in flight the slot stays as the update set it.
+/// The systems a phone has as boot images beside Android: on xaga, the
+/// iOS userland whose image the phone's own switch app put in
+/// `/data/local/tmp`, and Android. Picking one and swiping writes its image
+/// into the boot partition the bootloader starts and restarts into it; the
+/// other slot is never touched.
+pub fn boot_menu(cx: &Ctx) -> Frame {
+    let (t, f, s, i, l) = (cx.t, cx.f, cx.state, cx.info, cx.state.lang);
+    let mut c = long_page(cx);
+    let mut out = Vec::new();
+    let top = t.m.content_top;
+    let title = l.pick(BOOT_SYSTEM);
+    let Some(menu) = &s.boot_menu else {
+        widgets::list(
+            &mut c,
+            t,
+            f,
+            top,
+            &[Row::new(l.pick(["本机没有可切换的启动镜像", "本機沒有可切換的啟動映像檔", "This phone has no boot images to switch between"])).trail(Trail::None)],
+        );
+        return Frame::new(t, c, out, title, top);
+    };
+    let on_a = i.slot == Some(Slot::A);
+    let y = widgets::section_first(&mut c, t, f, top, l.pick(["选择要启动的系统", "選擇要啟動的系統", "Choose the system to start"]));
+    let sizes: Vec<Option<u64>> = menu.entries.iter().map(|e| std::fs::metadata(&e.image).ok().map(|m| m.len()).filter(|n| *n > 0)).collect();
+    let subtitles: Vec<String> = menu
+        .entries
+        .iter()
+        .zip(&sizes)
+        .map(|(entry, size)| {
+            let detail = if entry.detail.is_empty() { String::new() } else { format!("{} · ", entry.detail) };
+            match size {
+                Some(n) => format!("{detail}{}", fmt::file_size(*n)),
+                None => format!("{detail}{}", l.pick(["未找到镜像", "找不到映像檔", "Image not found"])),
+            }
+        })
+        .collect();
+    let rows: Vec<Row> = menu
+        .entries
+        .iter()
+        .zip(&subtitles)
+        .enumerate()
+        .map(|(k, (entry, subtitle))| {
+            let colour = if entry.id == "ios" { BLUE } else { GREEN };
+            Row::new(&entry.name).icon(colour, Icon::Phone).subtitle(subtitle).trail(Trail::Check(s.boot_pick == Some(k)))
+        })
+        .collect();
+    let opens: Vec<Option<Action>> = sizes.iter().enumerate().map(|(k, size)| (on_a && size.is_some()).then_some(Action::PickBoot(k))).collect();
+    let list = widgets::list(&mut c, t, f, y, &rows);
+    for (&rect, open) in list.rows.iter().zip(opens) {
+        if let Some(action) = open {
+            out.push(Hit { rect, action });
+        }
+    }
+    let mut y = list.bottom;
+    if !on_a {
+        y = widgets::footnote(
+            &mut c,
+            t,
+            f,
+            y,
+            l.pick(["只可在槽位 A 上切换：这里写入的是 boot_a。", "只可在槽位 A 上切換：這裡寫入的是 boot_a。", "Switching is offered only on slot A: boot_a is what is written."]),
+        );
+        return Frame::new(t, fit(c, t, y), out, title, top);
+    }
+    let missing = menu.entries.iter().filter(|e| std::fs::metadata(&e.image).map(|m| m.len() == 0).unwrap_or(true)).count();
+    if missing > 0 {
+        y = widgets::footnote(
+            &mut c,
+            t,
+            f,
+            y,
+            l.pick([
+                "把启动镜像放到 data 分区的 /data/local/tmp 后再来；需要先完成「解密」。",
+                "把啟動映像檔放到 data 分割區的 /data/local/tmp 後再來；需要先完成「解密」。",
+                "Put the boot images in /data/local/tmp on the data partition first; Decrypt has to be done.",
+            ]),
+        );
+    }
+    if let Some(why) = &s.boot_error {
+        y = widgets::footnote(&mut c, t, f, y, why);
+    }
+    y = widgets::footnote(
+        &mut c,
+        t,
+        f,
+        y,
+        l.pick([
+            "只会写入 boot_a，boot_b 保持不变；切换后立即重启。",
+            "只會寫入 boot_a，boot_b 保持不變；切換後立即重新啟動。",
+            "Only boot_a is written; boot_b is left as it is. The phone restarts at once.",
+        ]),
+    );
+    if let Some(k) = s.boot_pick
+        && menu.entries.get(k).is_some_and(|e| std::fs::metadata(&e.image).is_ok_and(|m| m.len() > 0))
+    {
+        let (label, danger) = confirm_label(Confirm::Boot, cx.state);
+        let track = widgets::confirm(&mut c, t, f, y + t.m.dp(24.0), label, danger, s.confirm);
+        out.push(Hit { rect: track, action: Action::Confirm(Confirm::Boot) });
+    }
+    Frame::new(t, fit(c, t, y + t.m.dp(24.0)), out, title, top)
+}
+
 pub fn slot(cx: &Ctx) -> Frame {
     let (t, f, s, i, l) = (cx.t, cx.f, cx.state, cx.info, cx.state.lang);
     let mut c = page(cx);

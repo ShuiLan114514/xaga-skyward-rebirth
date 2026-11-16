@@ -1580,6 +1580,19 @@ impl<'a> Pages<'a> {
             worker.send(wlan::Command::On);
             self.wlan = Some(worker);
         }
+        self.app.state.boot_menu = cfg.boot_menu.as_ref().map(|menu| skyward_ui::app::BootMenuView {
+            partition: menu.partition.clone(),
+            entries: menu
+                .entries
+                .iter()
+                .map(|entry| skyward_ui::app::BootEntryView {
+                    id: entry.id.clone(),
+                    name: entry.name.clone(),
+                    detail: entry.detail.clone(),
+                    image: entry.image.clone(),
+                })
+                .collect(),
+        });
         self.scanned_at = Instant::now();
         self.app.state.update_server = cfg.update.is_some();
         self.drive_at = Instant::now();
@@ -2568,6 +2581,16 @@ impl Pages<'_> {
             Effect::ReadMounts => self.app.set_mounts(self.mounts()),
             Effect::ReadSlots => self.app.set_boot_slots(read_slots()),
             Effect::SetSlot(slot) => self.app.slot_switched(set_slot(slot), now),
+            Effect::BootTo { partition, image, name } => {
+                skyward_sys::kmsg(&format!("writing {name} into {partition}, as the boot menu asked"))?;
+                match crate::bootmenu::write(&partition, &image) {
+                    Ok(()) => {
+                        skyward_sys::kmsg(&format!("{name} is in {partition}; restarting into it"))?;
+                        skyward_sys::power(Power::System)?;
+                    }
+                    Err(e) => self.app.boot_failed(format!("{e:#}")),
+                }
+            }
             Effect::ReadSystems => self.systems()?.send(systems::Task::Read),
             // An install still under way may yet write the boot
             // partitions; a switch waits for it.
