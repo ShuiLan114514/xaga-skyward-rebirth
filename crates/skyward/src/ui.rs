@@ -1571,7 +1571,12 @@ impl<'a> Pages<'a> {
                 let _ = skyward_sys::kmsg(&format!("the vendor interface's libraries are not open: {e:#}"));
                 None
             });
-            self.wlan = Some(wlan::Worker::start(w.clone(), modules, libraries, self.servers.clone())?);
+            let worker = wlan::Worker::start(w.clone(), modules, libraries, self.servers.clone())?;
+            // The first switch-on calibrates the chip for tens of seconds;
+            // do it now, while the pages come up, and leave the supplicant
+            // to the switch itself.
+            worker.send(wlan::Command::Warm);
+            self.wlan = Some(worker);
         }
         self.scanned_at = Instant::now();
         self.app.state.update_server = cfg.update.is_some();
