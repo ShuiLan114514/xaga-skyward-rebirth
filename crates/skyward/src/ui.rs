@@ -1573,9 +1573,11 @@ impl<'a> Pages<'a> {
             });
             let worker = wlan::Worker::start(w.clone(), modules, libraries, self.servers.clone())?;
             // The first switch-on calibrates the chip for tens of seconds;
-            // do it now, while the pages come up, and leave the supplicant
-            // to the switch itself.
-            worker.send(wlan::Command::Warm);
+            // do it now, while the pages come up, so the page opens with the
+            // WLAN already on rather than making the user wait for it. The
+            // supplicant comes up with it: a chip left on with no supplicant
+            // did not keep running on xaga.
+            worker.send(wlan::Command::On);
             self.wlan = Some(worker);
         }
         self.scanned_at = Instant::now();

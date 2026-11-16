@@ -79,9 +79,6 @@ const RETRY: Duration = Duration::from_secs(10);
 
 /// What the screen asks of the WLAN.
 pub enum Command {
-    /// Load the driver and have the chip calibrate, without a supplicant:
-    /// the recovery does this as it comes up, so the switch is quick.
-    Warm,
     On,
     Off,
     Scan,
@@ -268,7 +265,6 @@ impl Station {
 
     fn command(&mut self, c: Command) {
         match c {
-            Command::Warm => self.warm(),
             Command::On => self.on(),
             Command::Off => self.off(),
             Command::Scan => {
@@ -297,25 +293,6 @@ impl Station {
                     self.lost(e);
                 }
                 self.state.joined = None;
-            }
-        }
-    }
-
-    /// Have the driver and the chip ready for a switch-on later: the
-    /// interface comes up, and the chip's calibration, which takes tens of
-    /// seconds the first time, happens while the rest of the recovery comes
-    /// up. The supplicant is left for [`Command::On`], so nothing joins a
-    /// network on its own.
-    fn warm(&mut self) {
-        if self.running.is_some() {
-            return;
-        }
-        match bring_up(&self.cfg, &self.modules) {
-            Ok(()) => {
-                let _ = skyward_sys::kmsg(&format!("{} is warmed up for a later switch-on", self.cfg.interface));
-            }
-            Err(e) => {
-                let _ = skyward_sys::kmsg(&format!("{} is not warmed up: {e:#}", self.cfg.interface));
             }
         }
     }
