@@ -13,6 +13,7 @@ use crate::fmt::{self, Verb};
 use crate::font::Fonts;
 use crate::geom::Rect;
 use crate::lang::{Lang, Text};
+use crate::portrait::Portrait;
 use crate::search;
 use crate::term::{self, Term};
 use crate::theme::Theme;
@@ -27,6 +28,26 @@ use skyward_net::wlan::{Bands, Network, Power, Stage as Joining};
 use skyward_systems::{Held, Who};
 use skyward_vab::{Slot, Standing};
 use std::path::Path;
+use std::sync::OnceLock;
+
+/// Where the packer puts the photo of the phone a build carries, if it has
+/// one: `devices/<codename>.png` beside the configuration.
+const PORTRAIT: &str = "/skyward/portrait.png";
+
+/// The portrait, read once; none where the build carries none.
+static PORTRAIT_IMAGE: OnceLock<Option<Portrait>> = OnceLock::new();
+
+fn portrait() -> Option<&'static Portrait> {
+    PORTRAIT_IMAGE
+        .get_or_init(|| {
+            // The host's previews have no ramdisk to read it from, and name
+            // one of their own where they draw a phone that has a photo.
+            let named = std::env::var_os("SKYWARD_PORTRAIT").map(std::path::PathBuf::from);
+            let path = named.as_deref().unwrap_or_else(|| Path::new(PORTRAIT));
+            Portrait::load(path).ok().flatten()
+        })
+        .as_ref()
+}
 
 // The colours the stock Settings fills its icons' tiles with, the same in
 // light and dark mode.
@@ -258,7 +279,7 @@ pub fn home(cx: &Ctx) -> Frame {
         rows.push(Row::new(l.pick(SECOND_FAILED)).icon(RED, Icon::Systems).subtitle(why).trail(Trail::Arrow));
         opens.push(Some(Action::Open(Screen::Systems)));
     }
-    let card = widgets::device_card(&mut c, t, f, y, &i.model, &sub, &rows);
+    let card = widgets::device_card(&mut c, t, f, y, &i.model, &sub, &rows, portrait());
     out.push(Hit { rect: card.rows[0], action: Action::Open(Screen::About) });
     out.extend(card.rows[1..].iter().zip(&opens).filter_map(|(&rect, open)| open.map(|action| Hit { rect, action })));
     y = card.bottom + t.m.card_gap;

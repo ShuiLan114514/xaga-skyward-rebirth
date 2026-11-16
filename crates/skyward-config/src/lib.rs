@@ -15,6 +15,9 @@ pub mod ramdisk {
     /// The monospaced typeface's licence, which travels with every copy of
     /// it.
     pub const MONO_LICENSE: &str = "skyward/KirkMono-OFL.txt";
+    /// The photo of the phone itself, shown on the home page, where the
+    /// build carries one: `devices/<codename>.png` beside the configuration.
+    pub const PORTRAIT: &str = "skyward/portrait.png";
     /// The recovery service binary init starts.
     pub const RECOVERY: &str = "system/bin/recovery";
     /// The first program of a system installed beside the installed one,
@@ -201,7 +204,7 @@ pub struct Firmware {
 
 /// Where Skyward's own releases are published, which the recovery asks
 /// about a newer one: an account and a repository, such as the project's
-/// own `kirklin/skyward`. A build of one's own names its repository here.
+/// own `ShuiLan114514/xaga-skyward-rebirth`. A build of one's own names its repository here.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct Skyward {
     pub releases: String,
@@ -606,7 +609,7 @@ impl DeviceConfig {
     /// Where Skyward's own releases are asked about: what the phone names,
     /// or the project's own repository.
     pub fn releases(&self) -> &str {
-        const PROJECT: &str = "kirklin/skyward";
+        const PROJECT: &str = "ShuiLan114514/xaga-skyward-rebirth";
         self.skyward.as_ref().map_or(PROJECT, |skyward| skyward.releases.as_str())
     }
 
@@ -1106,7 +1109,7 @@ mod tests {
     #[test]
     fn a_build_asks_its_own_releases_where_the_phone_names_them() {
         let plain = DeviceConfig::parse("[device]\ncodename = \"x\"\n").unwrap();
-        assert_eq!(plain.releases(), "kirklin/skyward", "the project's own where a phone names none");
+        assert_eq!(plain.releases(), "ShuiLan114514/xaga-skyward-rebirth", "the project's own where a phone names none");
         let own = DeviceConfig::parse("[device]\ncodename = \"x\"\n[skyward]\nreleases = \"BkaNeko/xaga-skyward\"\n").unwrap();
         assert_eq!(own.releases(), "BkaNeko/xaga-skyward");
     }

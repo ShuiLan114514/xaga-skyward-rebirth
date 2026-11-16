@@ -5,7 +5,7 @@ use anyhow::{bail, ensure, Context, Result};
 use serde::Deserialize;
 
 /// Where GitHub answers which release of Skyward is the newest.
-pub const PROJECT: &str = "kirklin/skyward";
+pub const PROJECT: &str = "ShuiLan114514/xaga-skyward-rebirth";
 
 /// Where the latest release of `releases`, which reads as the account and
 /// the repository, is asked about.

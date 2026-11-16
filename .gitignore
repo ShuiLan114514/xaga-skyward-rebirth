@@ -1,6 +1,7 @@
 target/
 /out/
 /stock/
+/backup/
 .idea/
 .vscode/
 .DS_Store

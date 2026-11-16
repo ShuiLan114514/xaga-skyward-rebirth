@@ -120,8 +120,8 @@ recovery = "fed80580d619b916d73b51b704f2af6c9f08afafc84810ced0b2397a0b52797f"
 
 [skyward]
 # Where this build's own releases are published, which its update page asks
-# about a newer one. This fork publishes them itself; the project's own is
-# `kirklin/skyward`, which a phone that names none is asked about.
+# about a newer one. This fork publishes them itself, and is the default a
+# phone that names no releases is asked about.
 releases = "ShuiLan114514/xaga-skyward-rebirth"
 
 [update]

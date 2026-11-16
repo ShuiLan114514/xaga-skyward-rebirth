@@ -332,6 +332,12 @@ fn edit_ramdisk(rd: &mut Ramdisk, stock: &Path, files: &Packed<'_>, add: &[Strin
     rd.add(paths::FONT, 0o644, read(files.font)?)?;
     rd.add(paths::MONO, 0o644, read(files.mono)?)?;
     rd.add(paths::MONO_LICENSE, 0o644, read(files.mono_license)?)?;
+    // A photo of the phone beside its configuration, for the home page's
+    // device card; a build whose device has none keeps the stock outline.
+    let portrait = files.config.with_extension("png");
+    if portrait.is_file() {
+        rd.add(paths::PORTRAIT, 0o644, read(&portrait)?)?;
+    }
     // A stock ramdisk may run logd without any scheduling profiles, and
     // logd stops as soon as it cannot find the one it asks for.
     if rd.find(paths::TASK_PROFILES).is_none() {

@@ -1661,7 +1661,8 @@ pub fn list_toned(c: &mut Canvas, t: &Theme, f: &Fonts, top: f32, rows: &[Row], 
 
 /// Account-style card: avatar, name and detail, then optional rows. The
 /// first rect returned covers the name row.
-pub fn device_card(c: &mut Canvas, t: &Theme, f: &Fonts, top: f32, title: &str, sub: &str, rows: &[Row]) -> Block {
+#[allow(clippy::too_many_arguments)]
+pub fn device_card(c: &mut Canvas, t: &Theme, f: &Fonts, top: f32, title: &str, sub: &str, rows: &[Row], portrait: Option<&crate::portrait::Portrait>) -> Block {
     let m = &t.m;
     let lays: Vec<Layout> = rows.iter().map(|r| layout(c, t, f, r)).collect();
     let h = m.account_row_h + lays.iter().map(|l| l.h).sum::<f32>();
@@ -1672,7 +1673,10 @@ pub fn device_card(c: &mut Canvas, t: &Theme, f: &Fonts, top: f32, title: &str, 
     let av = m.avatar;
     let acx = card_x + m.avatar_inset + av / 2.0;
     c.fill_circle(acx, cy, av / 2.0, t.pal.avatar);
-    icons::glyph(c, Icon::Phone, acx, cy, av * 0.86, t.pal.avatar_glyph);
+    match portrait {
+        Some(portrait) => portrait.draw(c, acx, cy, av / 2.0),
+        None => icons::glyph(c, Icon::Phone, acx, cy, av * 0.86, t.pal.avatar_glyph),
+    }
 
     let tx = card_x + m.inner + m.icon + m.icon_gap;
     let (tt, tb) = f.heading.ink(m.account_title_px);
