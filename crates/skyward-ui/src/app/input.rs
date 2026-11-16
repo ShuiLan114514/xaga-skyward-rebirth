@@ -10,6 +10,9 @@ impl App {
         if !self.display_on {
             return Vec::new();
         }
+        if self.locked {
+            return self.touch_locked(ev, now);
+        }
         // A finger on the charging screen sends it away for the page, and
         // does nothing else until it lifts.
         if self.charge_shown() {
@@ -331,6 +334,27 @@ impl App {
         // Any button stops a gliding page, and brings a sliding one to rest.
         self.fling = None;
         self.end_turn();
+        // Behind the lock screen the power key lights or darkens the panel;
+        // the other keys wait for the swipe.
+        if self.locked {
+            if key != Key::Power {
+                return Vec::new();
+            }
+            if !self.display_on {
+                self.wake(now);
+                self.button = Some((key, Press::Spent));
+                return Vec::new();
+            }
+            if self.just_woke(now) {
+                self.stir(now);
+                self.button = Some((key, Press::Spent));
+                return Vec::new();
+            }
+            self.stir(now);
+            self.button = Some((key, Press::Spent));
+            self.sleep(now);
+            return vec![Effect::Ticks];
+        }
         if let Some((first, at)) = self.chord
             && matches!((first, key), (Key::Power, Key::VolumeDown) | (Key::VolumeDown, Key::Power))
             && now < at + CHORD_MS
@@ -439,6 +463,10 @@ impl App {
     /// partner in a screenshot came, the key waiting for it first does what
     /// it does alone.
     pub fn key_up(&mut self, key: Key, now: u64) -> Vec<Effect> {
+        if self.locked {
+            self.button = None;
+            return Vec::new();
+        }
         let mut fx = match self.chord {
             Some((first, _)) if first == key => self.let_chord_go(now),
             _ => Vec::new(),

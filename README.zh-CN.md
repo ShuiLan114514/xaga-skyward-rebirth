@@ -113,23 +113,14 @@ Skyward 是使用 Rust 编写的 recovery，从零开始编写。
 | 🚧 REDMI K90 Ultra | `warsaw` | OS3.0.309.0.WHPCNXM（Android 16） |
 | 🚧 REDMI K100 Pro | `athens` | OS4.0.4.0.XPICNXM（Android 17） |
 | 🚧 REDMI K100 Pro Max | `songyuan` | OS4.0.4.0.XGNCNXM（Android 17） |
-| 🚧 Redmi Note 11T Pro | `xaga` | OS1.0.3.0.ULOCNXM（Android 14） |
 
 ## 安装 Skyward
 
-Skyward 需要已解锁的 bootloader。从 [Releases](https://github.com/ShuiLan114514/xaga-skyward-rebirth/releases) 下载对应机型的 zip，每个文件都标有机型和代号，例如 Xiaomi 17 Ultra (nezha)。使用 `SHA256SUMS` 核对并解压之后，在手机处于 fastboot 模式的时候，把其中的镜像刷入当前运行槽位的 recovery 分区：
+Skyward 需要已解锁的 bootloader。从 [Releases](https://github.com/kirklin/skyward/releases) 下载对应机型的 zip，每个文件都标有机型和代号，例如 Xiaomi 17 Ultra (nezha)。使用 `SHA256SUMS` 核对并解压之后，在手机处于 fastboot 模式的时候，把其中的镜像刷入当前运行槽位的 recovery 分区：
 
 ```sh
 unzip skyward-v0.3.1-nezha-OS4.0.4.0.XPACNXM.zip
 fastboot flash recovery skyward-v0.3.1-nezha-OS4.0.4.0.XPACNXM.img
-fastboot reboot recovery
-```
-
-recovery 位于 `vendor_boot` 分区的机型（例如 Redmi Note 11T Pro / `xaga`）改为刷入该分区：
-
-```sh
-unzip skyward-v0.3.3-xaga-OS1.0.3.0.ULOCNXM.zip
-fastboot flash vendor_boot skyward-v0.3.3-xaga-OS1.0.3.0.ULOCNXM.img
 fastboot reboot recovery
 ```
 

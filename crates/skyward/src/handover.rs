@@ -12,6 +12,12 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+/// How long the files of one run may take to be there once the modules are
+/// loaded: a driver makes its own as it takes its device up, and ueventd
+/// makes the device's node once the kernel has told it of the device, either
+/// of which may come after the load of the module returns.
+const FILES_MADE: Duration = Duration::from_secs(5);
+
 /// What handing the files over came to: how many were given to their
 /// accounts, and the ones the kernel made none of this boot.
 pub struct Given {
@@ -31,18 +37,23 @@ pub fn wait_for_nodes(runs: &[Owners], timeout: Duration) {
 }
 
 /// Give each of the phone's own files the account and mode its init gives
-/// it, as its chown and chmod lines do. A file the kernel made none of on
-/// this boot, such as the RPMB unit of a kind of storage the phone does not
-/// have, is passed over and named in the answer rather than holding up
-/// everything after it.
+/// it, as its chown and chmod lines do. One the modules just loaded make may
+/// be there a while after the load returns, and is waited for. A file the
+/// kernel makes none of this boot, such as the RPMB unit of a kind of
+/// storage the phone does not have, is passed over and named in the answer
+/// rather than holding up everything after it; the waiting is all of it
+/// together, so that a phone missing several makes its boot no later for
+/// them.
 pub fn give(runs: &[Owners]) -> Result<Given> {
     let known = ueventd::accounts(&ueventd::PASSWD_FILES.iter().chain(&ueventd::GROUP_FILES).copied().collect::<Vec<_>>());
     let id = |name: &str| ueventd::account(&known, name).with_context(|| format!("the phone has no account named {name}"));
     let mut given = Given { handed: 0, missing: Vec::new() };
+    let until = Instant::now() + FILES_MADE;
     for run in runs {
         let (uid, gid) = (id(&run.user)?, id(&run.group)?);
         for path in &run.paths {
-            if !Path::new(path).exists() {
+            let left = until.saturating_duration_since(Instant::now());
+            if skyward_sys::wait_file(Path::new(path), left).is_err() {
                 given.missing.push(path.clone());
                 continue;
             }

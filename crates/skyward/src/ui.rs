@@ -1369,6 +1369,7 @@ impl<'a> Pages<'a> {
         let by_name = Path::new(skyward_block::BY_NAME);
         let both = |base: &str| -> Result<bool> { Ok(by_name.join(format!("{base}_a")).try_exists()? && by_name.join(format!("{base}_b")).try_exists()?) };
         app.state.recovery_partition = cfg.device.recovery_partition.clone();
+        app.state.edl = cfg.device.edl;
         app.state.recovery_partitions = both(&app.state.recovery_partition)?;
         app.state.dual_boot = app.state.recovery_partitions && both("boot")? && both("init_boot")?;
         // The second system's work; the systems are read at once, for the home
@@ -1571,28 +1572,8 @@ impl<'a> Pages<'a> {
                 let _ = skyward_sys::kmsg(&format!("the vendor interface's libraries are not open: {e:#}"));
                 None
             });
-            let worker = wlan::Worker::start(w.clone(), modules, libraries, self.servers.clone())?;
-            // The first switch-on calibrates the chip for tens of seconds;
-            // do it now, while the pages come up, so the page opens with the
-            // WLAN already on rather than making the user wait for it. The
-            // supplicant comes up with it: a chip left on with no supplicant
-            // did not keep running on xaga.
-            worker.send(wlan::Command::On);
-            self.wlan = Some(worker);
+            self.wlan = Some(wlan::Worker::start(w.clone(), modules, libraries, self.servers.clone())?);
         }
-        self.app.state.boot_menu = cfg.boot_menu.as_ref().map(|menu| skyward_ui::app::BootMenuView {
-            partition: menu.partition.clone(),
-            entries: menu
-                .entries
-                .iter()
-                .map(|entry| skyward_ui::app::BootEntryView {
-                    id: entry.id.clone(),
-                    name: entry.name.clone(),
-                    detail: entry.detail.clone(),
-                    image: entry.image.clone(),
-                })
-                .collect(),
-        });
         self.scanned_at = Instant::now();
         self.app.state.update_server = cfg.update.is_some();
         self.drive_at = Instant::now();
@@ -1663,6 +1644,9 @@ impl<'a> Pages<'a> {
     /// What time passing asks for: the motor's clicks and ticks, and the
     /// status bar's clock drawn again as its minute turns.
     fn tick(&mut self, now: u64) -> Result<()> {
+        if !self.app.state.lock_screen && self.app.is_locked() {
+            self.app.unlock_screen();
+        }
         for fx in self.app.tick(now) {
             match fx {
                 Effect::Haptic => self.click()?,
@@ -1736,6 +1720,18 @@ impl<'a> Pages<'a> {
     /// rest it or turn it off as the page asks. Gives whether the panel is
     /// lit, and whether a frame was shown.
     fn show(&mut self, now: u64) -> Result<(bool, bool)> {
+        // The screen going off keeps what it showed for the lock screen,
+        // blurred before the panel's frame is blacked out. This is done as
+        // the darkening starts, while the frame still holds the page.
+        if !self.app.display_on()
+            && self.app.state.lock_screen
+            && !self.app.is_locked()
+            && !self.blanked
+            && !self.fastboot
+            && self.inputs.has_panel()
+        {
+            self.app.lock_with_snapshot(&self.screen);
+        }
         let panel = self.app.panel(now);
         let mut shown = false;
         if panel.is_some() {
@@ -1794,7 +1790,7 @@ impl<'a> Pages<'a> {
     fn wait(&mut self, sleeper: &Sleeper, uevents: &uevent::Listener, now: u64, lit: bool, shown: bool) -> Result<()> {
         // A page at rest draws the rows it has yet to while nothing else
         // is to be done, a band at a time, looking for input between bands.
-        let ahead = lit && !shown && self.app.draw_ahead(&self.fonts, &self.info);
+        let ahead = lit && !shown && !self.app.is_locked() && self.app.draw_ahead(&self.fonts, &self.info);
         // A frame shown has waited for the one before it to reach the
         // panel, which keeps the loop to the panel's pace; otherwise the CPU
         // gets at least a millisecond.
@@ -2581,16 +2577,6 @@ impl Pages<'_> {
             Effect::ReadMounts => self.app.set_mounts(self.mounts()),
             Effect::ReadSlots => self.app.set_boot_slots(read_slots()),
             Effect::SetSlot(slot) => self.app.slot_switched(set_slot(slot), now),
-            Effect::BootTo { partition, image, name } => {
-                skyward_sys::kmsg(&format!("writing {name} into {partition}, as the boot menu asked"))?;
-                match crate::bootmenu::write(&partition, &image) {
-                    Ok(()) => {
-                        skyward_sys::kmsg(&format!("{name} is in {partition}; restarting into it"))?;
-                        skyward_sys::power(Power::System)?;
-                    }
-                    Err(e) => self.app.boot_failed(format!("{e:#}")),
-                }
-            }
             Effect::ReadSystems => self.systems()?.send(systems::Task::Read),
             // An install still under way may yet write the boot
             // partitions; a switch waits for it.

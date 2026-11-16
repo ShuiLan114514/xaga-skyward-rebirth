@@ -277,6 +277,106 @@ impl Canvas {
         }
     }
 
+    /// A copy of this canvas, which holds all of itself, shrunk by `factor`
+    /// both ways, each pixel the average of the block it stands for.
+    pub fn downscaled(&self, factor: u32) -> Canvas {
+        assert!(self.whole(), "a canvas is scaled whole");
+        let f = factor.max(1) as usize;
+        if f == 1 {
+            return self.clone();
+        }
+        let (w, h) = (self.w as usize, self.h as usize);
+        let (ow, oh) = (w.div_ceil(f), h.div_ceil(f));
+        let mut out = Canvas::new(ow as u32, oh as u32);
+        for oy in 0..oh {
+            let y0 = oy * f;
+            let y1 = (y0 + f).min(h);
+            for ox in 0..ow {
+                let x0 = ox * f;
+                let x1 = (x0 + f).min(w);
+                let mut sums = [0u32; 4];
+                let mut n = 0u32;
+                for y in y0..y1 {
+                    for x in x0..x1 {
+                        let at = (y * w + x) * 4;
+                        for c in 0..4 {
+                            sums[c] += self.data[at + c] as u32;
+                        }
+                        n += 1;
+                    }
+                }
+                let at = (oy * ow + ox) * 4;
+                let n = n.max(1);
+                for c in 0..4 {
+                    out.data[at + c] = ((sums[c] + n / 2) / n) as u8;
+                }
+            }
+        }
+        out
+    }
+
+    /// A copy of this canvas, which holds all of itself, scaled to `w` × `h`
+    /// with the colours between its pixels mixed.
+    pub fn scaled(&self, w: u32, h: u32) -> Canvas {
+        assert!(self.whole(), "a canvas is scaled whole");
+        if (self.w, self.h) == (w, h) {
+            return self.clone();
+        }
+        let mut out = Canvas::new(w, h);
+        if self.w == 0 || self.h == 0 || w == 0 || h == 0 {
+            return out;
+        }
+        // The pixels either side of each output pixel, and how much of the
+        // second it takes, in 256ths.
+        let axis = |out: u32, source: u32| -> Vec<(usize, usize, u32)> {
+            (0..out)
+                .map(|i| {
+                    let at = ((i as f32 + 0.5) * source as f32 / out as f32 - 0.5).clamp(0.0, source as f32 - 1.0);
+                    let first = at.floor() as usize;
+                    let second = (first + 1).min(source as usize - 1);
+                    (first, second, (at - first as f32).mul_add(256.0, 0.5) as u32)
+                })
+                .collect()
+        };
+        let (xs, ys) = (axis(w, self.w), axis(h, self.h));
+        let sw = self.w as usize;
+        for (y, &(y0, y1, wy)) in ys.iter().enumerate() {
+            for (x, &(x0, x1, wx)) in xs.iter().enumerate() {
+                let at = |px: usize, py: usize| (py * sw + px) * 4;
+                let (a, b, c, d) = (at(x0, y0), at(x1, y0), at(x0, y1), at(x1, y1));
+                let o = (y * w as usize + x) * 4;
+                for k in 0..4 {
+                    let top = (self.data[a + k] as u32 * (256 - wx) + self.data[b + k] as u32 * wx + 128) >> 8;
+                    let bottom = (self.data[c + k] as u32 * (256 - wx) + self.data[d + k] as u32 * wx + 128) >> 8;
+                    out.data[o + k] = ((top * (256 - wy) + bottom * wy + 128) >> 8) as u8;
+                }
+            }
+        }
+        out
+    }
+
+    /// A copy of this canvas, which holds all of itself, blurred by about
+    /// `radius` pixels: three passes of a box blur each way, which rounds a
+    /// point into a soft disc. A radius below half a pixel leaves it as it
+    /// is.
+    pub fn blurred(&self, radius: f32) -> Canvas {
+        assert!(self.whole(), "a canvas is blurred whole");
+        let longest = self.w.min(self.h) as usize;
+        let radius = radius.round().max(0.0) as usize;
+        let radius = radius.min(longest / 2);
+        if radius == 0 {
+            return self.clone();
+        }
+        let (w, h) = (self.w as usize, self.h as usize);
+        let mut out = self.clone();
+        let mut tmp = vec![0u8; w * h * 4];
+        for _ in 0..3 {
+            blur_rows(&out.data, &mut tmp, w, h, radius);
+            blur_cols(&tmp, &mut out.data, w, h, radius);
+        }
+        out
+    }
+
     /// Lay `layer`, whose top-left corner goes at (`x`, `y`), over this
     /// opaque canvas at `alpha` of its strength.
     pub fn lay(&mut self, layer: &Canvas, x: i32, y: i32, alpha: f32) {
@@ -1188,6 +1288,67 @@ fn rr_sdf(px: f32, py: f32, cx: f32, cy: f32, hx: f32, hy: f32, r: f32) -> f32 {
     (ox * ox + oy * oy).sqrt() + dx.max(dy).min(0.0) - r
 }
 
+/// Blur every row of a whole RGBA canvas with a box `radius` wide, its
+/// window clamped at the edges, into `dst`.
+fn blur_rows(src: &[u8], dst: &mut [u8], w: usize, h: usize, radius: usize) {
+    if w == 0 || h == 0 {
+        return;
+    }
+    let div = (radius * 2 + 1) as u32;
+    for y in 0..h {
+        let row = y * w * 4;
+        let mut sums = [0u32; 4];
+        for k in 0..=radius * 2 {
+            let x = k.saturating_sub(radius).min(w - 1);
+            let at = row + x * 4;
+            for c in 0..4 {
+                sums[c] += src[at + c] as u32;
+            }
+        }
+        for x in 0..w {
+            let at = row + x * 4;
+            for c in 0..4 {
+                dst[at + c] = (sums[c] / div) as u8;
+            }
+            let add = row + (x + radius + 1).min(w - 1) * 4;
+            let sub = row + x.saturating_sub(radius) * 4;
+            for c in 0..4 {
+                sums[c] = sums[c] + src[add + c] as u32 - src[sub + c] as u32;
+            }
+        }
+    }
+}
+
+/// Blur every column of a whole RGBA canvas with a box `radius` tall, its
+/// window clamped at the edges, into `dst`.
+fn blur_cols(src: &[u8], dst: &mut [u8], w: usize, h: usize, radius: usize) {
+    if w == 0 || h == 0 {
+        return;
+    }
+    let div = (radius * 2 + 1) as u32;
+    for x in 0..w {
+        let mut sums = [0u32; 4];
+        for k in 0..=radius * 2 {
+            let y = k.saturating_sub(radius).min(h - 1);
+            let at = (y * w + x) * 4;
+            for c in 0..4 {
+                sums[c] += src[at + c] as u32;
+            }
+        }
+        for y in 0..h {
+            let at = (y * w + x) * 4;
+            for c in 0..4 {
+                dst[at + c] = (sums[c] / div) as u8;
+            }
+            let add = ((y + radius + 1).min(h - 1) * w + x) * 4;
+            let sub = (y.saturating_sub(radius) * w + x) * 4;
+            for c in 0..4 {
+                sums[c] = sums[c] + src[add + c] as u32 - src[sub + c] as u32;
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1327,6 +1488,32 @@ mod tests {
             assert_eq!(at(5 + 6, y), 50 + 60, "past the corner the page is whole");
         }
         assert!(at(6, 2) > 0 && at(6, 2) < 60, "the curve is smoothed: {}", at(6, 2));
+    }
+
+    #[test]
+    fn shrinking_averages_blocks_and_scaling_mixes_between_pixels() {
+        let mut image = Canvas::filled(2, 2, Rgba::rgb(0, 0, 0));
+        image.data[..4].copy_from_slice(&[255, 255, 255, 255]);
+        let small = image.downscaled(2);
+        assert_eq!((small.w, small.h), (1, 1));
+        assert_eq!(&small.data, &[64, 64, 64, 255], "one white of four is a quarter");
+        let big = small.scaled(4, 4);
+        assert!(big.data.as_chunks::<4>().0.iter().all(|p| *p == [64, 64, 64, 255]), "a uniform picture stays uniform");
+        assert_eq!(big.blurred(2.0).data, big.data, "and so it stays under a blur");
+    }
+
+    #[test]
+    fn blurring_keeps_a_uniform_canvas_and_spreads_one_bright_pixel() {
+        let uniform = Canvas::filled(9, 9, Rgba::rgb(40, 80, 120));
+        assert_eq!(uniform.blurred(3.0).data, uniform.data);
+        let mut point = Canvas::filled(9, 9, Rgba::rgb(0, 0, 0));
+        let at = (4 * 9 + 4) * 4;
+        point.data[at..at + 4].copy_from_slice(&[255, 255, 255, 255]);
+        let blurred = point.blurred(1.0);
+        let grey = |x: usize, y: usize| blurred.data[(y * 9 + x) * 4];
+        assert!(grey(4, 4) > 0 && grey(4, 4) < 255, "the point spreads: {}", grey(4, 4));
+        assert!(grey(3, 4) > 0 && grey(5, 4) > 0, "either side");
+        assert_eq!(grey(0, 0), 0, "a box one pixel around reaches no further than one");
     }
 
     #[test]

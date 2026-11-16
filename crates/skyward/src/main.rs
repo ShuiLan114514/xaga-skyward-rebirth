@@ -10,8 +10,6 @@ use std::path::{Path, PathBuf};
 #[cfg(target_os = "android")]
 mod backup;
 #[cfg(target_os = "android")]
-mod bootmenu;
-#[cfg(target_os = "android")]
 mod decrypt;
 #[cfg(target_os = "android")]
 mod filework;
@@ -588,9 +586,6 @@ fn bring_up(cfg: &DeviceConfig, slot: skyward_vab::Slot, found: Result<keys::Fou
         skyward_sys::kmsg(&format!("loaded {}", path.display()))?;
     }
     if !cfg.owners.is_empty() {
-        // A driver makes its nodes a moment after its module is in, and the
-        // phone's own programs cannot open them until they are there.
-        handover::wait_for_nodes(&cfg.owners, FILES_MADE);
         let given = handover::give(&cfg.owners)?;
         skyward_sys::kmsg(&format!("{} of the phone's own files handed to the accounts its init gives them", given.handed))?;
         if !given.missing.is_empty() {
@@ -647,13 +642,6 @@ fn bring_up(cfg: &DeviceConfig, slot: skyward_vab::Slot, found: Result<keys::Fou
     keys::start(&steps)?;
     agree_on_the_notes_key(&registering)
 }
-
-/// How long a file handed over may take to be there once the modules are
-/// loaded: a driver makes its files as it takes its device up, and ueventd
-/// makes the device's node once the kernel has told it of the device,
-/// either of which may come after the load of the module returns.
-#[cfg(target_os = "android")]
-const FILES_MADE: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// The folder the recovery's own programs load their libraries from.
 #[cfg(target_os = "android")]

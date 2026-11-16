@@ -2,24 +2,6 @@
 
 use super::*;
 
-/// The systems a phone's boot menu offers, and the partition their images
-/// go to.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct BootMenuView {
-    pub partition: String,
-    pub entries: Vec<BootEntryView>,
-}
-
-/// One system the boot menu offers, and the image the switch app put on the
-/// data partition for it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct BootEntryView {
-    pub id: String,
-    pub name: String,
-    pub detail: String,
-    pub image: String,
-}
-
 /// Choices the pages show and the user changes, and where installing
 /// stands.
 #[derive(Clone, Debug, PartialEq)]
@@ -31,6 +13,12 @@ pub struct State {
     pub language_chosen: bool,
     pub dark: bool,
     pub brightness: f32,
+    /// The screen locks when it goes off, and a swipe up lets the pages
+    /// show again.
+    pub lock_screen: bool,
+    /// How strongly the lock screen's background is blurred, from 0 at the
+    /// slider's left end to 1 at its right.
+    pub lock_blur: f32,
     /// How long the screen stays on with nothing touched, by its place in
     /// [`SCREEN_OFF`].
     pub screen_off: usize,
@@ -68,6 +56,8 @@ pub struct State {
     /// own, or `vendor_boot` on a phone whose recovery rides in the vendor
     /// boot image.
     pub recovery_partition: String,
+    /// The phone has Qualcomm's EDL mode to reboot into.
+    pub edl: bool,
     /// The phone keeps its recovery in a partition of each slot, which the
     /// install page then offers to keep Skyward in.
     pub recovery_partitions: bool,
@@ -120,12 +110,6 @@ pub struct State {
     /// Why the second system's start stopped, as its first program told
     /// it, which the systems page shows.
     pub system_notice: Option<String>,
-    /// The boot images a phone has beside Android, where it has any.
-    pub boot_menu: Option<BootMenuView>,
-    /// The system picked on the boot menu, whose image a swipe writes.
-    pub boot_pick: Option<usize>,
-    /// Why the boot menu's last write did not go.
-    pub boot_error: Option<String>,
     /// Where the data partition stands, and what is typed at the screen
     /// lock its users' own files wait on.
     pub data: Data,
@@ -218,6 +202,8 @@ impl Default for State {
             language_chosen: false,
             dark: false,
             brightness: SLIDER_START,
+            lock_screen: true,
+            lock_blur: 0.5,
             // Two minutes.
             screen_off: 3,
             time_zone: 0,
@@ -236,6 +222,7 @@ impl Default for State {
             script_output: Vec::new(),
             check_signature: false,
             recovery_partition: "recovery".into(),
+            edl: true,
             recovery_partitions: false,
             keep_recovery: true,
             reflash: None,
@@ -255,9 +242,6 @@ impl Default for State {
             dual_boot: false,
             systems: None,
             system_pick: None,
-            boot_menu: None,
-            boot_pick: None,
-            boot_error: None,
             systems_work: None,
             system_notice: None,
             data: Data::Closed,

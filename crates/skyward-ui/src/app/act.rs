@@ -51,6 +51,7 @@ impl App {
             Action::Toggle(switch) => {
                 let on = match switch {
                     Switch::Vibrate => &mut self.state.vibrate,
+                    Switch::LockScreen => &mut self.state.lock_screen,
                     Switch::FileTransfer => &mut self.state.file_transfer,
                     Switch::Compress => &mut self.state.compress,
                     Switch::Verify => &mut self.state.verify,
@@ -62,6 +63,9 @@ impl App {
                 *on = !*on;
                 let now_on = *on;
                 self.refresh();
+                if switch == Switch::LockScreen && !now_on {
+                    self.unlock_screen();
+                }
                 if switch == Switch::FileTransfer {
                     return vec![Effect::FileTransfer(now_on)];
                 }
@@ -135,12 +139,6 @@ impl App {
                     self.state.confirm = 0.0;
                     self.refresh();
                 }
-            }
-            Action::PickBoot(k) => {
-                self.state.boot_pick = Some(k);
-                self.state.boot_error = None;
-                self.state.confirm = 0.0;
-                self.refresh();
             }
             Action::RebootTo(target) => return vec![Effect::Reboot(target)],
             Action::EnterRecovery => return vec![Effect::EnterRecovery],
@@ -707,7 +705,14 @@ impl App {
     pub(super) fn confirmed(&mut self, which: Confirm, now: u64) -> Vec<Effect> {
         let (l, mut fx) = (self.state.lang, Vec::new());
         match which {
-            Confirm::Reboot => fx.push(Effect::Reboot(TARGETS[self.state.reboot])),
+            Confirm::Reboot => {
+                let target = TARGETS[self.state.reboot];
+                if target == Target::Edl && !self.state.edl {
+                    self.say(l.pick(["本机没有 EDL 模式", "本機沒有 EDL 模式", "This phone has no EDL mode"]), now);
+                } else {
+                    fx.push(Effect::Reboot(target));
+                }
+            }
             Confirm::Wipe => {
                 let chosen: Vec<Wipe> = WIPES.iter().zip(self.state.wipe).filter(|(_, on)| *on).map(|(&w, _)| w).collect();
                 match chosen.is_empty() {
@@ -820,15 +825,6 @@ impl App {
                     fx.push(Effect::SwitchSystem(pick));
                     self.state.systems_work = Some(SystemsWork::Switching(pick));
                     self.state.system_pick = None;
-                    self.refresh();
-                }
-            }
-            Confirm::Boot => {
-                if let (Some(menu), Some(pick)) = (&self.state.boot_menu, self.state.boot_pick)
-                    && let Some(entry) = menu.entries.get(pick)
-                {
-                    fx.push(Effect::BootTo { partition: menu.partition.clone(), image: entry.image.clone(), name: entry.name.clone() });
-                    self.state.boot_pick = None;
                     self.refresh();
                 }
             }

@@ -85,6 +85,17 @@ mod tests {
     }
 
     #[test]
+    fn a_phone_without_edl_is_not_offered_it() {
+        let (f, i) = (fonts(), info());
+        let mut app = App::new(Screen::Reboot, W, H, PPD);
+        app.state.edl = false;
+        let page = app.frame(&f, &i);
+        assert!(page.hits.iter().all(|h| h.action != Action::RebootTarget(4)), "no EDL row");
+        let rows = page.hits.iter().filter(|h| matches!(h.action, Action::RebootTarget(_))).count();
+        assert_eq!(rows, TARGETS.len() - 1, "every other target is there");
+    }
+
+    #[test]
     fn letting_go_halfway_does_not_reboot() {
         let (f, i) = (fonts(), info());
         let mut app = App::new(Screen::Reboot, W, H, PPD);

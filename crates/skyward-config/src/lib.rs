@@ -90,37 +90,6 @@ pub struct DeviceConfig {
     /// The stock build the recovery is made on.
     #[serde(default)]
     pub stock: Option<Stock>,
-    /// The boot images a phone has beside Android, which the recovery may
-    /// write in place of the one it starts from, as the xaga's iOS userland
-    /// is started.
-    #[serde(default)]
-    pub boot_menu: Option<BootMenu>,
-}
-
-/// The boot images a phone can start from, and the partition they are
-/// written to: on xaga, `boot_a`, whose image the bootloader starts, while
-/// `boot_b` keeps Android untouched.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct BootMenu {
-    /// The partition the chosen image is written to, such as `boot_a`.
-    pub partition: String,
-    #[serde(default, rename = "entry")]
-    pub entries: Vec<BootEntry>,
-}
-
-/// One system the boot menu offers: its name, what it is, and the image the
-/// phone's own switch app put on the data partition.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct BootEntry {
-    /// A name stable across starts, such as `ios`.
-    pub id: String,
-    /// What the page calls it, such as `iOS userland`.
-    pub name: String,
-    /// What it is, such as `XNU · APFS iosroot`.
-    #[serde(default)]
-    pub detail: String,
-    /// The image's path, which is on the data partition.
-    pub image: String,
 }
 
 /// The stock build a recovery is made on: the phone maker's full update
@@ -235,7 +204,7 @@ pub struct Firmware {
 
 /// Where Skyward's own releases are published, which the recovery asks
 /// about a newer one: an account and a repository, such as the project's
-/// own `ShuiLan114514/xaga-skyward-rebirth`. A build of one's own names its repository here.
+/// own `kirklin/skyward`. A build of one's own names its repository here.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct Skyward {
     pub releases: String,
@@ -358,6 +327,10 @@ pub struct Device {
     pub model: String,
     #[serde(default = "default_true")]
     pub ab: bool,
+    /// Whether the phone has Qualcomm's EDL mode to reboot into; MediaTek
+    /// phones have BROM instead, which the running system cannot enter.
+    #[serde(default = "default_true")]
+    pub edl: bool,
     /// SoC marketing name shown on the About page.
     #[serde(default)]
     pub soc: Option<Names>,
@@ -640,7 +613,7 @@ impl DeviceConfig {
     /// Where Skyward's own releases are asked about: what the phone names,
     /// or the project's own repository.
     pub fn releases(&self) -> &str {
-        const PROJECT: &str = "ShuiLan114514/xaga-skyward-rebirth";
+        const PROJECT: &str = "kirklin/skyward";
         self.skyward.as_ref().map_or(PROJECT, |skyward| skyward.releases.as_str())
     }
 
@@ -719,23 +692,6 @@ impl DeviceConfig {
             }
         }
         check_given("[[owners]]", &cfg.owners)?;
-        if let Some(menu) = &cfg.boot_menu {
-            let partition = &menu.partition;
-            ensure!(!partition.is_empty() && !partition.contains('/'), "[boot_menu] partition: {partition} is not a partition's name");
-            ensure!(!menu.entries.is_empty(), "[boot_menu] names no system to start");
-            for entry in &menu.entries {
-                ensure!(!entry.id.is_empty() && !entry.id.contains(char::is_whitespace), "[boot_menu] entry: {:?} is not an id", entry.id);
-                ensure!(!entry.name.is_empty(), "[boot_menu] entry {}: no name", entry.id);
-                let image = Path::new(&entry.image);
-                let plain = image.components().all(|c| matches!(c, std::path::Component::RootDir | std::path::Component::Normal(_)));
-                ensure!(image.is_absolute() && plain && image.file_name().is_some(), "[boot_menu] entry {}: {} is not an absolute path to a file", entry.id, entry.image);
-            }
-            let mut ids: Vec<&str> = menu.entries.iter().map(|e| e.id.as_str()).collect();
-            let count = ids.len();
-            ids.sort_unstable();
-            ids.dedup();
-            ensure!(ids.len() == count, "[boot_menu] entries repeat an id");
-        }
         if let Some(stock) = &cfg.stock {
             let name = stock.package.rsplit('/').next().unwrap_or_default();
             ensure!(
@@ -811,21 +767,9 @@ mod tests {
     }
 
     #[test]
-    fn the_boot_menu_names_both_its_images_plainly() {
-        let text = include_str!("../../../devices/xaga.toml");
-        let cfg = DeviceConfig::parse(text).unwrap();
-        let menu = cfg.boot_menu.expect("the xaga names its boot images");
-        assert_eq!(menu.partition, "boot_a");
-        assert_eq!(menu.entries.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), ["ios", "android"]);
-        assert_eq!(menu.entries[0].image, "/data/local/tmp/ios-boot.img");
-        assert!(DeviceConfig::parse("[device]\ncodename = \"x\"\n[boot_menu]\npartition = \"boot_a\"\n").is_err(), "no images");
-        assert!(
-            DeviceConfig::parse(
-                "[device]\ncodename = \"x\"\n[boot_menu]\npartition = \"boot_a\"\n[[boot_menu.entry]]\nid = \"a\"\nname = \"A\"\nimage = \"relative.img\"\n"
-            )
-            .is_err(),
-            "a relative image"
-        );
+    fn a_mediatek_phone_is_not_offered_an_edl_it_has_not() {
+        let cfg = DeviceConfig::parse(include_str!("../../../devices/xaga.toml")).unwrap();
+        assert!(!cfg.device.edl, "the xaga has BROM, not an EDL the running system enters");
     }
 
     #[test]
@@ -844,6 +788,7 @@ mod tests {
         let cfg = DeviceConfig::parse("[device]\ncodename = \"nezha\"\n").unwrap();
         assert_eq!(cfg.device.codename, "nezha");
         assert!(cfg.device.ab);
+        assert!(cfg.device.edl, "EDL is offered unless a phone says it has none");
         assert_eq!(cfg.device.os_version_prop, "ro.build.display.id");
         assert_eq!(cfg.modules.sources, default_module_sources());
         assert!(cfg.modules.load.is_empty());
@@ -1175,7 +1120,7 @@ mod tests {
     #[test]
     fn a_build_asks_its_own_releases_where_the_phone_names_them() {
         let plain = DeviceConfig::parse("[device]\ncodename = \"x\"\n").unwrap();
-        assert_eq!(plain.releases(), "ShuiLan114514/xaga-skyward-rebirth", "the project's own where a phone names none");
+        assert_eq!(plain.releases(), "kirklin/skyward", "the project's own where a phone names none");
         let own = DeviceConfig::parse("[device]\ncodename = \"x\"\n[skyward]\nreleases = \"BkaNeko/xaga-skyward\"\n").unwrap();
         assert_eq!(own.releases(), "BkaNeko/xaga-skyward");
     }

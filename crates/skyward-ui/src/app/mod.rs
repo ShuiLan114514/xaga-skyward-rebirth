@@ -43,6 +43,7 @@ mod frame;
 mod input;
 mod install;
 mod keys;
+mod lock;
 mod manager;
 mod mount;
 mod nav;
@@ -154,9 +155,6 @@ pub enum Screen {
     /// The installed system and the one Skyward installed beside it: which
     /// of them starts, switching between them, and taking the other away.
     Systems,
-    /// The systems a phone has as boot images beside Android, such as the
-    /// xaga's iOS userland, which the bootloader starts from `boot_a`.
-    BootMenu,
     /// The phone's own fastbootd serving the computer's fastboot, and where
     /// to go from it. Its only page, worked with the keys: the partitions
     /// the touchscreen runs from are left out while fastbootd rewrites
@@ -222,9 +220,6 @@ pub enum Confirm {
     /// Switch to the system picked on the systems page, and restart into
     /// it.
     SwitchSystem,
-    /// Write the boot image picked on the boot menu into its partition, and
-    /// restart into it.
-    Boot,
     /// Take the other system away.
     RemoveSystem,
     /// Install the system the installer holds with the room chosen.
@@ -296,8 +291,6 @@ pub enum Action {
     PickSlot(Slot),
     /// Pick this system to start next; a swipe then switches to it.
     PickSystem(Who),
-    /// Pick this system on the boot menu; a swipe then writes its image.
-    PickBoot(usize),
     /// Give the root of the system being installed the size at this place
     /// in those offered.
     SystemSize(usize),
@@ -466,10 +459,6 @@ pub enum Effect {
     /// into it, telling of a switch that did not go with
     /// [`App::systems_work_failed`].
     SwitchSystem(Who),
-    /// Write `image` into `partition`, which holds the boot image the
-    /// bootloader starts, and restart into it, telling of a write that did
-    /// not go with [`App::boot_failed`].
-    BootTo { partition: String, image: String, name: String },
     /// Take the other system away, telling how it went with
     /// [`App::set_systems`] or [`App::systems_work_failed`].
     RemoveSystem,
@@ -1202,6 +1191,14 @@ pub struct App {
     /// How round the screen's corners are, in pixels.
     corners: f32,
     dirty: bool,
+    /// The screen is locked until a swipe up lets the pages show again.
+    locked: bool,
+    /// What the lock screen shows behind it, blurred when the screen went
+    /// off; none until it first does.
+    lock_bg: Option<Canvas>,
+    /// Where a finger swiping up on the lock screen started and has come
+    /// to, for the hint to follow it.
+    lock_drag: Option<(f32, f32)>,
     w: u32,
     h: u32,
     px_per_dp: f32,
@@ -1268,6 +1265,9 @@ impl App {
             backdrop: None,
             corners: 0.0,
             dirty: true,
+            locked: false,
+            lock_bg: None,
+            lock_drag: None,
             w,
             h,
             px_per_dp,

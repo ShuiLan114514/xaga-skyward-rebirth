@@ -9,11 +9,15 @@ pub enum Slider {
     Brightness,
     /// How strongly the motor taps.
     Vibration,
+    /// How strongly the lock screen's background is blurred.
+    LockBlur,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Switch {
     Vibrate,
+    /// Lock the screen when it goes off.
+    LockScreen,
     /// Offer internal storage to a computer over USB.
     FileTransfer,
     /// Compress a backup.
@@ -60,6 +64,7 @@ impl App {
         match which {
             Slider::Brightness => self.state.brightness,
             Slider::Vibration => self.state.vibration,
+            Slider::LockBlur => self.state.lock_blur,
         }
     }
 
@@ -69,6 +74,7 @@ impl App {
         let value = match which {
             Slider::Brightness => &mut self.state.brightness,
             Slider::Vibration => &mut self.state.vibration,
+            Slider::LockBlur => &mut self.state.lock_blur,
         };
         *value = level.clamp(if which == Slider::Brightness { MIN_BRIGHTNESS } else { 0.0 }, 1.0);
         let value = *value;
@@ -100,6 +106,27 @@ mod tests {
         assert_eq!(tap_at(&mut app, &f, &i, Action::Toggle(Switch::FileTransfer), 3000), [Effect::FileTransfer(true)]);
         app.file_transfer_failed(false, "无法开启文件传输", 4000);
         assert!(!app.state.file_transfer, "the switch shows how it stands");
+    }
+
+    #[test]
+    fn the_lock_screen_switch_and_blur_are_set_in_the_settings() {
+        let (f, i) = (fonts(), info());
+        let mut app = opened(Screen::Settings, &f, &i);
+        let (_, y) = spot(&mut app, &f, &i, Action::Toggle(Switch::LockScreen));
+        if y > H as f32 * 0.9 {
+            scroll_to(&mut app, &f, y - H as f32 * 0.8, 0);
+        }
+        assert!(tap(&mut app, &f, &i, Action::Toggle(Switch::LockScreen)).is_empty());
+        assert!(!app.state.lock_screen);
+        assert!(tap(&mut app, &f, &i, Action::Toggle(Switch::LockScreen)).is_empty());
+        assert!(app.state.lock_screen);
+
+        let track = app.frame(&f, &i).hits.iter().find(|h| h.action == Action::Slider(Slider::LockBlur)).expect("lock blur slider").rect;
+        let y = track.centre().1 - app.top().1;
+        assert!(app.touch(Touch::Down(track.x + track.w * 0.2, y), &f, 1000).is_empty());
+        assert!(app.touch(Touch::Move(track.x + track.w * 0.8, y), &f, 1100).is_empty());
+        assert!(app.touch(Touch::Up, &f, 1200).is_empty());
+        assert!((app.state.lock_blur - 0.8).abs() < 1e-5);
     }
 
     #[test]

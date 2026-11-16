@@ -119,6 +119,7 @@ impl App {
         self.morph = None;
         self.row_press = None;
         self.row_art = None;
+        self.lock_drag = None;
         self.end_turn();
     }
 

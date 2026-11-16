@@ -165,6 +165,11 @@ impl App {
     /// while a cable has just gone in, both as dark as the content stands
     /// as the panel goes off or comes up.
     pub fn compose(&mut self, out: &mut Canvas, f: &Fonts, info: &DeviceInfo, clock: &str, now: u64) {
+        if self.locked && self.display_on {
+            self.compose_locked(out, f, info, clock);
+            out.dim(self.curtain.level(now));
+            return;
+        }
         let charge = self.charging.as_ref().map_or(0.0, |c| c.shown.level(now));
         if charge < 1.0 {
             self.compose_page(out, f, info, clock, now);
@@ -173,6 +178,17 @@ impl App {
             self.compose_charging(out, f, info, charge, now);
         }
         out.dim(self.curtain.level(now));
+    }
+
+    /// The lock screen over the frame the panel went off on, blurred when
+    /// it did. The time and the hint follow the page's theme.
+    fn compose_locked(&mut self, out: &mut Canvas, f: &Fonts, info: &DeviceInfo, clock: &str) {
+        let t = self.theme();
+        match &self.lock_bg {
+            Some(bg) if (bg.w, bg.h) == (out.w, out.h) => out.data.copy_from_slice(&bg.data),
+            _ => out.clear(t.pal.bg),
+        }
+        crate::lock::draw(out, &t, f, info, self.state.lang, clock, self.state.time_zone, self.lock_progress());
     }
 
     /// The charging screen, `level` of the way over the page drawn on `out`.
@@ -797,7 +813,7 @@ mod tests {
         let mut app = App::new(Screen::Home, W, H, PPD);
         let slots = |active| BootSlots { active, bootable: [true, true], successful: [true, true] };
         app.set_boot_slots(Ok(slots(Slot::B)));
-        assert!(app.frame(&f, &i).hits.iter().all(|h| h.action != Action::Open(Screen::Slot)), "the slot it runs from starts next");
+        assert!(app.frame(&f, &i).hits.iter().any(|h| h.action == Action::Open(Screen::Slot)), "the dual boot row opens the slot page");
         app.set_boot_slots(Ok(slots(Slot::A)));
         assert_eq!(tap(&mut app, &f, &i, Action::Open(Screen::Slot)), vec![Effect::ReadSlots]);
         assert_eq!(app.screen(), Screen::Slot);

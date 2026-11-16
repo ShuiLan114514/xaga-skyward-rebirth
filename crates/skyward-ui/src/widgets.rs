@@ -1674,7 +1674,9 @@ pub fn device_card(c: &mut Canvas, t: &Theme, f: &Fonts, top: f32, title: &str, 
     let acx = card_x + m.avatar_inset + av / 2.0;
     c.fill_circle(acx, cy, av / 2.0, t.pal.avatar);
     match portrait {
-        Some(portrait) => portrait.draw(c, acx, cy, av / 2.0),
+        // The photo stands a little inside the avatar's circle, so the
+        // phone reads as an icon rather than filling the whole badge.
+        Some(portrait) => portrait.draw(c, acx, cy, av * 0.4),
         None => icons::glyph(c, Icon::Phone, acx, cy, av * 0.86, t.pal.avatar_glyph),
     }
 
@@ -1731,6 +1733,8 @@ pub enum Caption {
     Sun,
     /// A phone between the lines of its shaking.
     Vibrate,
+    /// A padlock, as the lock screen shows it.
+    Lock,
 }
 
 /// Card with a monochrome icon caption, a slider, and an optional row below.
@@ -1771,6 +1775,7 @@ pub fn slider_card(c: &mut Canvas, t: &Theme, f: &Fonts, top: f32, caption: Capt
                 }
             }
         }
+        Caption::Lock => icons::glyph(c, Icon::Lock, scx, lcy, m.dp(19.0), t.pal.mono_icon),
     }
     // The caption is set like the account name, in the softer text colour.
     c.text_vc(&f.heading, label, card_x + m.dp(53.7), lcy, m.account_title_px, t.pal.info, None);

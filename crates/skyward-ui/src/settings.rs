@@ -39,6 +39,12 @@ pub struct Settings {
     pub dark: bool,
     /// The brightness slider's place, from 0 at its left end to 1.
     pub brightness: f32,
+    /// The screen locks when it goes off, and a swipe up lets the pages
+    /// show again.
+    pub lock_screen: bool,
+    /// How strongly the lock screen's background is blurred, from 0 at its
+    /// left end to 1.
+    pub lock_blur: f32,
     /// How long the screen stays on with nothing touched, in seconds; 0
     /// keeps it on.
     pub screen_off: u64,
@@ -121,6 +127,8 @@ impl Settings {
             spoken: Some(state.lang.tag().to_string()),
             dark: state.dark,
             brightness: state.brightness,
+            lock_screen: state.lock_screen,
+            lock_blur: state.lock_blur,
             screen_off: SCREEN_OFF[state.screen_off].map_or(0, |ms| ms / 1000),
             time_zone: TIME_ZONES[state.time_zone].2.to_string(),
             vibrate: state.vibrate,
@@ -173,6 +181,10 @@ impl Settings {
         if (0.0..=1.0).contains(&self.brightness) {
             state.brightness = self.brightness;
         }
+        state.lock_screen = self.lock_screen;
+        if (0.0..=1.0).contains(&self.lock_blur) {
+            state.lock_blur = self.lock_blur;
+        }
         if let Some(at) = SCREEN_OFF.iter().position(|off| off.map_or(0, |ms| ms / 1000) == self.screen_off) {
             state.screen_off = at;
         }
@@ -211,7 +223,10 @@ fn picked<const N: usize>(kept: &[String], all: &[&str; N]) -> [bool; N] {
     all.map(|name| kept.iter().any(|k| k == name))
 }
 
-/// What the settings file held as the recovery started.
+/// What the settings file held as the recovery started. The settings are
+/// carried whole here, and the value is made and dropped once at a start,
+/// so the difference between the variants' sizes costs nothing.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum Kept {
     Settings(Settings),
@@ -303,6 +318,8 @@ mod tests {
             language_chosen: true,
             dark: true,
             brightness: 0.7,
+            lock_screen: false,
+            lock_blur: 0.8,
             screen_off: 6,
             time_zone: 7,
             vibrate: false,
@@ -323,6 +340,7 @@ mod tests {
         kept.apply(&mut back);
         assert_eq!(Settings::of(&back), Settings::of(&state));
         assert_eq!((back.lang, back.screen_off, back.time_zone), (Lang::En, 6, 7));
+        assert_eq!((back.lock_screen, back.lock_blur), (false, 0.8));
     }
 
     #[test]
@@ -330,6 +348,8 @@ mod tests {
         let state = State { screen_off: 3, time_zone: 1, backup: [true, false, false, true], ..State::default() };
         let text = Settings::of(&state).text();
         let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(json["lock_screen"], true);
+        assert_eq!(json["lock_blur"], 0.5);
         assert_eq!(json["screen_off"], 120, "two minutes, in seconds");
         assert_eq!(json["time_zone"], "Asia/Hong_Kong");
         assert_eq!(json["backup"]["parts"], serde_json::json!(["boot", "modem"]));
@@ -357,6 +377,7 @@ mod tests {
             language: Some("not a locale".into()),
             brightness: 17.5,
             vibration: f32::NAN,
+            lock_blur: f32::NAN,
             screen_off: 7,
             time_zone: "Mars/Olympus".into(),
             backup: Backup { parts: vec!["boot".into(), "photos".into()], to: "cloud".into(), ..Backup::default() },

@@ -77,13 +77,6 @@ impl App {
         self.refresh();
     }
 
-    /// Why writing the boot image the boot menu picked did not go: the page
-    /// says it and the recovery stays.
-    pub fn boot_failed(&mut self, why: String) {
-        self.state.boot_error = Some(why);
-        self.refresh();
-    }
-
     /// The second system's start stopped, for `why`, as its first program
     /// told it: the systems page shows it, over the home page.
     pub fn system_stopped(&mut self, why: String) {

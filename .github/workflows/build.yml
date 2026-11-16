@@ -1,9 +1,9 @@
 name: Build
 
-# Every push is linted and tested, and the recovery is built for every
-# device in devices/, each image zipped. A tag starting with v publishes
-# those zips as a release, each shown as the phone it is for. Run by hand,
-# it can build for one device alone.
+# Every push is linted and tested, and the recovery is built for the phone
+# this fork carries, its image zipped. A tag starting with v publishes that
+# zip as a release, shown as the phone it is for. Run by hand, it can build
+# for one device alone.
 on:
   push:
     branches: ["**"]
@@ -24,6 +24,10 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # The phones this fork builds for: the Redmi Note 11T Pro alone, whose
+  # port this fork carries. A device named by hand adds to them; the
+  # others' images are the project's own to build and publish.
+  DEVICES: xaga
 
 jobs:
   # A release goes by its tag to whoever downloads it, and a build by the
@@ -101,7 +105,7 @@ jobs:
             test -f "devices/$DEVICE.toml"
             echo "devices=$(jq -nc --arg device "$DEVICE" '[$device]')" >> "$GITHUB_OUTPUT"
           else
-            echo "devices=$(basename -s .toml devices/*.toml | jq -R . | jq -sc .)" >> "$GITHUB_OUTPUT"
+            echo "devices=$(echo "$DEVICES" | tr -s " " "\n" | jq -R . | jq -sc .)" >> "$GITHUB_OUTPUT"
           fi
 
   recovery:
@@ -169,7 +173,7 @@ jobs:
   release:
     name: Publish the release
     if: github.ref_type == 'tag'
-    needs: [tag, check, recovery]
+    needs: [tag, check, recovery, devices]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -194,10 +198,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          DEVICES: ${{ needs.devices.outputs.devices }}
         run: |
           zips=()
-          for config in devices/*.toml; do
-            device=$(basename "$config" .toml)
+          for device in $(echo "$DEVICES" | jq -r '.[]'); do
+            config="devices/$device.toml"
             model=$(python3 -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["device"]["model"])' "$config")
             zip=$(ls images/skyward-"$GITHUB_REF_NAME"-"$device"-*.zip)
             zips+=("$zip#$model ($device)")

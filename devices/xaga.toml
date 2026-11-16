@@ -5,6 +5,8 @@ brand = "Redmi"
 # Redmi K50i; the phone itself calls all of them xaga.
 model = "Redmi Note 11T Pro"
 ab = true
+# MediaTek's BROM is not an EDL the running system can enter.
+edl = false
 soc = { hans = "天玑 8100", hant = "天璣 8100", en = "Dimensity 8100" }
 os_version_prop = "ro.mi.os.version.incremental"
 # The recovery this is built on lives in the vendor_boot partition, as it
@@ -120,9 +122,9 @@ recovery = "fed80580d619b916d73b51b704f2af6c9f08afafc84810ced0b2397a0b52797f"
 
 [skyward]
 # Where this build's own releases are published, which its update page asks
-# about a newer one. This fork publishes them itself, and is the default a
-# phone that names no releases is asked about.
-releases = "ShuiLan114514/xaga-skyward-rebirth"
+# about a newer one. This fork publishes them itself; the project's own is
+# `kirklin/skyward`, which a phone that names none is asked about.
+releases = "BkaNeko/xaga-skyward"
 
 [update]
 # The phone maker's update server, which the stock updater asks about the
@@ -217,14 +219,10 @@ ready_hardware_service = "android.hardware.boot@1.2::IBootControl/default"
 # MediaTek's connectivity bring-up: the loader opens the connectivity
 # driver's node and asks it to set the chip's part of the firmware up, then
 # tells the phone it is ready; the assistant waits for the WLAN driver's
-# node and writes the chip's settings to it. Both are started at boot, and
-# the loader runs once: the phone's own init marks it oneshot, and it ends
-# badly once it has done its work, which init does not mind. A shell keeps
-# that from taking the recovery's bring-up with it.
+# node and writes the chip's settings to it. Both are started at boot and
+# wait, so the WLAN's own bring-up is what opens their nodes to them.
 [[service]]
-path = "/system/bin/sh"
-args = ["-c", "/vendor/bin/conninfra_loader & exit 0"]
-oneshot = true
+path = "/vendor/bin/conninfra_loader"
 libraries = ["/system/lib64", "/vendor/lib64"]
 user = "system"
 groups = ["system"]
@@ -277,26 +275,7 @@ efs = ["nvdata", "nvcfg", "protect1", "protect2", "persist"]
 [wipe]
 logs = ["/data/vendor/mtklog", "/data/vendor/connsyslog"]
 
-# WLAN comes up through the phone's own programs: conninfra_loader, run
-# once, and wlan_assistant, started at boot, and the driver switched on by
-# the [wlan] write above. What they need from the installed system is its nvdata
+# WLAN comes up through the phone's own programs: conninfra_loader and
+# wlan_assistant, started at boot, and the driver switched on by the [wlan]
+# write above. What they need from the installed system is its nvdata
 # partition, which the [wlan] mount provides.
-
-# The xaga's own switch app keeps the iOS userland's boot image and
-# Android's in the data partition and writes the chosen one into boot_a,
-# then restarts; boot_b is never touched. Skyward offers the same here
-# until the official dual-boot path replaces it.
-[boot_menu]
-partition = "boot_a"
-
-[[boot_menu.entry]]
-id = "ios"
-name = "iOS userland"
-detail = "XNU · APFS iosroot"
-image = "/data/local/tmp/ios-boot.img"
-
-[[boot_menu.entry]]
-id = "android"
-name = "Android"
-detail = "HyperOS / Android"
-image = "/data/local/tmp/android-boot.img"
